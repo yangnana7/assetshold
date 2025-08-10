@@ -99,6 +99,7 @@ function AssetList() {
             <th>資産名</th>
             <th>取得日</th>
             <th>簿価</th>
+            <th>評価額</th>
             <th>流動性</th>
             <th>アクション</th>
           </tr>
@@ -107,9 +108,15 @@ function AssetList() {
           {filteredAssets.map(asset => (
             <tr key={asset.id}>
               <td>{getAssetClassName(asset.class)}</td>
-              <td>{formatAssetName(asset.name, asset.note)}</td>
+              <td>
+                <div>
+                  {formatAssetName(asset.name, asset.note)}
+                  {renderEvaluationDetails(asset)}
+                </div>
+              </td>
               <td>{formatDate(asset.acquired_at)}</td>
               <td className="format-number">{formatCurrency(asset.book_value_jpy)}</td>
+              <td className="format-number">{renderEvaluationAmount(asset)}</td>
               <td>{asset.liquidity_tier}</td>
               <td>
                 <button 
@@ -153,6 +160,54 @@ function AssetList() {
       )}
     </div>
   )
+}
+
+function renderEvaluationDetails(asset) {
+  if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+    const details = asset.stock_details;
+    if (details) {
+      const priceField = asset.class === 'us_stock' ? 'avg_price_usd' : 'avg_price_jpy';
+      const currency = asset.class === 'us_stock' ? 'USD' : 'JPY';
+      const price = details[priceField] || 0;
+      const quantity = details.quantity || 0;
+      
+      const jsx = (
+        <div style={{ fontSize: '0.85em', color: '#666', marginTop: '4px' }}>
+          取得単価: {currency === 'USD' ? '$' : '¥'}{price.toFixed(2)} × {quantity}株
+        </div>
+      );
+      return jsx;
+    }
+  } else if (asset.class === 'precious_metal') {
+    const details = asset.precious_metal_details;
+    if (details) {
+      const unitPrice = details.unit_price_jpy || 0;
+      const weight = details.weight_g || 0;
+      
+      const jsx = (
+        <div style={{ fontSize: '0.85em', color: '#666', marginTop: '4px' }}>
+          単価: ¥{unitPrice.toFixed(2)} × {weight.toFixed(1)}g
+        </div>
+      );
+      return jsx;
+    }
+  }
+  return null;
+}
+
+function renderEvaluationAmount(asset) {
+  if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+    const details = asset.stock_details;
+    if (details && details.evaluation !== undefined) {
+      return formatCurrency(details.evaluation);
+    }
+  } else if (asset.class === 'precious_metal') {
+    const details = asset.precious_metal_details;
+    if (details && details.evaluation !== undefined) {
+      return formatCurrency(details.evaluation);
+    }
+  }
+  return formatCurrency(asset.book_value_jpy);
 }
 
 function getAssetClassName(classKey) {

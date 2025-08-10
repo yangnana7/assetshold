@@ -11,6 +11,13 @@ function App() {
   const { user, loading, login, logout } = useAuth()
   const [currentPage, setCurrentPage] = useState('dashboard')
 
+  // Redirect admin users to assets page after login
+  useEffect(() => {
+    if (user && user.role === 'admin' && currentPage === 'login') {
+      setCurrentPage('assets')
+    }
+  }, [user, currentPage])
+
   if (loading) {
     return <div className="app">Loading...</div>
   }

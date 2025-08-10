@@ -26,6 +26,15 @@ const app = express();
 const dbPath = path.join(__dirname, 'data', 'portfolio.db');
 const db = new sqlite3.Database(dbPath);
 
+// Enable WAL mode for better concurrency and reliability
+db.run('PRAGMA journal_mode = WAL', (err) => {
+  if (err) {
+    console.error('Failed to enable WAL mode:', err);
+  } else {
+    console.log('WAL mode enabled for database');
+  }
+});
+
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -121,6 +130,7 @@ function initDatabase() {
       metal TEXT NOT NULL,
       weight_g REAL NOT NULL,
       purity REAL,
+      unit_price_jpy REAL,
       FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
     )`);
 
@@ -265,7 +275,18 @@ app.get('/api/dashboard', (req, res) => {
     totalAssets: `SELECT COUNT(*) as count FROM assets`,
     totalValue: `SELECT SUM(book_value_jpy) as total FROM assets`,
     assetsByClass: `SELECT class, COUNT(*) as count, SUM(book_value_jpy) as total_value FROM assets GROUP BY class`,
-    topAssets: `SELECT name, note, book_value_jpy FROM assets ORDER BY book_value_jpy DESC LIMIT 3`
+    topAssets: `SELECT name, note, book_value_jpy FROM assets ORDER BY book_value_jpy DESC LIMIT 3`,
+    monthlyTrend: `
+      SELECT 
+        strftime('%Y-%m', created_at) as month,
+        SUM(book_value_jpy) as book_value_total,
+        SUM(book_value_jpy) as market_value_total
+      FROM assets 
+      WHERE created_at IS NOT NULL 
+      GROUP BY strftime('%Y-%m', created_at)
+      ORDER BY month DESC 
+      LIMIT 12
+    `
   };
   
   const results = {};
@@ -303,7 +324,59 @@ app.get('/api/assets', (req, res) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
-    res.json(rows);
+    
+    // Enhance assets with class-specific details for evaluation display
+    const enhancedRows = [];
+    let completed = 0;
+    
+    if (rows.length === 0) {
+      return res.json(rows);
+    }
+    
+    rows.forEach(asset => {
+      if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+        const table = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
+        const priceField = asset.class === 'us_stock' ? 'avg_price_usd' : 'avg_price_jpy';
+        
+        db.get(`SELECT * FROM ${table} WHERE asset_id = ?`, [asset.id], (err, details) => {
+          if (!err && details) {
+            const evaluation = Math.floor((details[priceField] || 0) * (details.quantity || 0));
+            asset.stock_details = {
+              ...details,
+              evaluation: evaluation
+            };
+          }
+          }
+          enhancedRows.push(asset);
+          completed++;
+          if (completed === rows.length) {
+            res.json(enhancedRows);
+          }
+        });
+      } else if (asset.class === 'precious_metal') {
+        db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
+          if (!err && details) {
+            const evaluation = Math.floor((details.unit_price_jpy || 0) * (details.weight_g || 0));
+            asset.precious_metal_details = {
+              ...details,
+              evaluation: evaluation
+            };
+          }
+          }
+          enhancedRows.push(asset);
+          completed++;
+          if (completed === rows.length) {
+            res.json(enhancedRows);
+          }
+        });
+      } else {
+        enhancedRows.push(asset);
+        completed++;
+        if (completed === rows.length) {
+          res.json(enhancedRows);
+        }
+      }
+    });
   });
 });
 
@@ -328,7 +401,19 @@ app.post('/api/assets', requireAdmin, (req, res) => {
     book_value_jpy,
     valuation_source = 'manual',
     liquidity_tier,
-    tags
+    tags,
+    // Stock-specific fields
+    ticker,
+    exchange,
+    code,
+    quantity,
+    avg_price_usd,
+    avg_price_jpy,
+    // Precious metal-specific fields
+    metal,
+    weight_g,
+    purity,
+    unit_price_jpy
   } = req.body;
   
   // Validation
@@ -336,35 +421,81 @@ app.post('/api/assets', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Missing required fields' });
   }
   
-  const stmt = db.prepare(`INSERT INTO assets 
-    (class, name, note, acquired_at, book_value_jpy, valuation_source, liquidity_tier, tags) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  // Class-specific validation
+  if (assetClass === 'us_stock' && (!ticker || !quantity || !avg_price_usd)) {
+    return res.status(400).json({ error: 'Missing required US stock fields' });
+  }
+  if (assetClass === 'jp_stock' && (!code || !quantity || !avg_price_jpy)) {
+    return res.status(400).json({ error: 'Missing required JP stock fields' });
+  }
+  if (assetClass === 'precious_metal' && (!metal || !weight_g || !unit_price_jpy)) {
+    return res.status(400).json({ error: 'Missing required precious metal fields' });
+  }
   
-  stmt.run(
-    assetClass, name, note, acquired_at, book_value_jpy, 
-    valuation_source, liquidity_tier, tags,
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
+  db.serialize(() => {
+    db.run('BEGIN TRANSACTION');
+    
+    try {
+      const stmt = db.prepare(`INSERT INTO assets 
+        (class, name, note, acquired_at, book_value_jpy, valuation_source, liquidity_tier, tags) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
       
-      const newAsset = {
-        id: this.lastID,
-        class: assetClass,
-        name,
-        note,
-        acquired_at,
-        book_value_jpy,
-        valuation_source,
-        liquidity_tier,
-        tags
-      };
-      
-      logAudit('assets', this.lastID, 'CREATE', null, newAsset, req.session.user.id);
-      res.status(201).json(newAsset);
+      stmt.run(
+        assetClass, name, note, acquired_at, book_value_jpy, 
+        valuation_source, liquidity_tier, tags,
+        function(err) {
+          if (err) {
+            db.run('ROLLBACK');
+            return res.status(500).json({ error: err.message });
+          }
+          
+          const assetId = this.lastID;
+          
+          // Insert class-specific data
+          if (assetClass === 'us_stock') {
+            const stockStmt = db.prepare(`INSERT INTO us_stocks 
+              (asset_id, ticker, exchange, quantity, avg_price_usd) 
+              VALUES (?, ?, ?, ?, ?)`);
+            stockStmt.run(assetId, ticker, exchange, parseFloat(quantity), parseFloat(avg_price_usd));
+            stockStmt.finalize();
+          } else if (assetClass === 'jp_stock') {
+            const stockStmt = db.prepare(`INSERT INTO jp_stocks 
+              (asset_id, code, quantity, avg_price_jpy) 
+              VALUES (?, ?, ?, ?)`);
+            stockStmt.run(assetId, code, parseFloat(quantity), parseFloat(avg_price_jpy));
+            stockStmt.finalize();
+          } else if (assetClass === 'precious_metal') {
+            const metalStmt = db.prepare(`INSERT INTO precious_metals 
+              (asset_id, metal, weight_g, purity, unit_price_jpy) 
+              VALUES (?, ?, ?, ?, ?)`);
+            metalStmt.run(assetId, metal, parseFloat(weight_g), purity ? parseFloat(purity) : null, parseFloat(unit_price_jpy));
+            metalStmt.finalize();
+          }
+          
+          db.run('COMMIT');
+          
+          const newAsset = {
+            id: assetId,
+            class: assetClass,
+            name,
+            note,
+            acquired_at,
+            book_value_jpy,
+            valuation_source,
+            liquidity_tier,
+            tags
+          };
+          
+          logAudit('assets', assetId, 'CREATE', null, newAsset, req.session.user.id);
+          res.status(201).json(newAsset);
+        }
+      );
+      stmt.finalize();
+    } catch (error) {
+      db.run('ROLLBACK');
+      return res.status(500).json({ error: error.message });
     }
-  );
-  stmt.finalize();
+  });
 });
 
 app.patch('/api/assets/:id', requireAdmin, (req, res) => {
@@ -432,6 +563,60 @@ app.delete('/api/assets/:id', requireAdmin, (req, res) => {
     });
   });
 });
+
+// Helper function to insert class-specific data
+function insertClassSpecificData(record, assetId, callback) {
+  try {
+    if (record.class === 'us_stock' && record.ticker && record.quantity && record.avg_price_usd) {
+      // Delete existing record first (for update case)
+      db.run('DELETE FROM us_stocks WHERE asset_id = ?', [assetId], (err) => {
+        if (!err) {
+          const stmt = db.prepare(`INSERT INTO us_stocks 
+            (asset_id, ticker, exchange, quantity, avg_price_usd) 
+            VALUES (?, ?, ?, ?, ?)`);
+          stmt.run(assetId, record.ticker, record.exchange || '', 
+            parseFloat(record.quantity), parseFloat(record.avg_price_usd), callback);
+          stmt.finalize();
+        } else {
+          callback(err);
+        }
+      });
+    } else if (record.class === 'jp_stock' && record.code && record.quantity && record.avg_price_jpy) {
+      db.run('DELETE FROM jp_stocks WHERE asset_id = ?', [assetId], (err) => {
+        if (!err) {
+          const stmt = db.prepare(`INSERT INTO jp_stocks 
+            (asset_id, code, quantity, avg_price_jpy) 
+            VALUES (?, ?, ?, ?)`);
+          stmt.run(assetId, record.code, 
+            parseFloat(record.quantity), parseFloat(record.avg_price_jpy), callback);
+          stmt.finalize();
+        } else {
+          callback(err);
+        }
+      });
+    } else if (record.class === 'precious_metal' && record.metal && record.weight_g && record.unit_price_jpy) {
+      db.run('DELETE FROM precious_metals WHERE asset_id = ?', [assetId], (err) => {
+        if (!err) {
+          const stmt = db.prepare(`INSERT INTO precious_metals 
+            (asset_id, metal, weight_g, purity, unit_price_jpy) 
+            VALUES (?, ?, ?, ?, ?)`);
+          stmt.run(assetId, record.metal, 
+            parseFloat(record.weight_g), 
+            record.purity ? parseFloat(record.purity) : null, 
+            parseFloat(record.unit_price_jpy), callback);
+          stmt.finalize();
+        } else {
+          callback(err);
+        }
+      });
+    } else {
+      // No class-specific data to insert
+      callback(null);
+    }
+  } catch (error) {
+    callback(error);
+  }
+}
 
 // CSV Import (File Upload)
 app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) => {
@@ -543,8 +728,14 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
                   if (!err) {
                     updatedCount++;
                     logAudit('assets', existing.id, 'UPDATE_CSV', null, record, 'system', 'csv_import');
+                    
+                    // Update class-specific data
+                    insertClassSpecificData(record, existing.id, (classErr) => {
+                      callback(classErr || err);
+                    });
+                  } else {
+                    callback(err);
                   }
-                  callback(err);
                 }
               );
               stmt.finalize();
@@ -565,10 +756,17 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
                 record.tags,
                 function(err) {
                   if (!err) {
+                    const assetId = this.lastID;
                     insertedCount++;
-                    logAudit('assets', this.lastID, 'CREATE_CSV', null, record, 'system', 'csv_import');
+                    logAudit('assets', assetId, 'CREATE_CSV', null, record, 'system', 'csv_import');
+                    
+                    // Insert class-specific data
+                    insertClassSpecificData(record, assetId, (classErr) => {
+                      callback(classErr || err);
+                    });
+                  } else {
+                    callback(err);
                   }
-                  callback(err);
                 }
               );
               stmt.finalize();
@@ -793,23 +991,87 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
 });
 
+// WAL Checkpoint function
+function performWalCheckpoint() {
+  db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
+    if (err) {
+      console.error('WAL checkpoint failed:', err);
+    } else {
+      console.log('WAL checkpoint completed');
+    }
+  });
+}
+
+// Setup periodic WAL checkpoints (every minute)
+function setupWalCheckpoints() {
+  setInterval(() => {
+    performWalCheckpoint();
+  }, 60000); // 60 seconds
+  console.log('WAL checkpoint scheduled every 60 seconds');
+}
+
+// Backup database function
+function backupDatabase() {
+  const backupDir = path.join(__dirname, 'backup');
+  
+  // Ensure backup directory exists
+  if (!fs.existsSync(backupDir)) {
+    fs.mkdirSync(backupDir, { recursive: true });
+  }
+  
+  const now = new Date();
+  const timestamp = now.toISOString().slice(0, 19).replace(/[:-]/g, '').replace('T', '_');
+  const backupPath = path.join(backupDir, `portfolio_${timestamp}.db`);
+  
+  try {
+    // Perform final checkpoint before backup
+    db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
+      if (err) {
+        console.error('Final checkpoint before backup failed:', err);
+      }
+      
+      // Copy database file
+      fs.copyFileSync(dbPath, backupPath);
+      console.log(`Database backed up to: ${backupPath}`);
+    });
+  } catch (error) {
+    console.error('Database backup failed:', error);
+  }
+}
+
 // Initialize database and start server
 initDatabase();
 setupCsvWatcher();
+setupWalCheckpoints();
 
 app.listen(port, () => {
   console.log(`Portfolio management server running on port ${port}`);
   console.log(`Dashboard URL: http://localhost:${port}`);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('Shutting down gracefully...');
-  db.close((err) => {
-    if (err) {
-      console.error(err.message);
-    }
-    console.log('Database connection closed.');
-    process.exit(0);
-  });
-});
+// Graceful shutdown with backup
+function gracefulShutdown(signal) {
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+  
+  // Perform backup before shutdown
+  console.log('Creating backup before shutdown...');
+  backupDatabase();
+  
+  // Wait a bit for backup to complete, then close database
+  setTimeout(() => {
+    db.close((err) => {
+      if (err) {
+        console.error('Database close error:', err.message);
+      } else {
+        console.log('Database connection closed.');
+      }
+      console.log('Server shutdown complete.');
+      process.exit(0);
+    });
+  }, 2000);
+}
+
+// Handle different shutdown signals
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));

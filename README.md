@@ -186,11 +186,15 @@ cd ..
 #### 3. systemd サービス設定
 
 ```bash
+# 現在のユーザー名とアプリケーションパスを確認
+whoami
+pwd
+
 # サービスファイル作成
 sudo nano /etc/systemd/system/assetshold.service
 ```
 
-以下の内容で保存：
+以下の内容で保存（**ユーザー名とパスを実際の環境に合わせて変更**）：
 
 ```ini
 [Unit]
@@ -199,21 +203,63 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/assetshold
+User=YOUR_USERNAME
+Group=YOUR_USERNAME
+WorkingDirectory=/path/to/your/assetshold
 Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/usr/local/bin
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=assetshold
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-#### 4. サービス起動
+**実際の設定例**：
+```ini
+[Unit]
+Description=Assets Portfolio Management Application
+After=network.target
+
+[Service]
+Type=simple
+User=yangnana
+Group=yangnana
+WorkingDirectory=/home/yangnana/assetshold
+Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/usr/local/bin
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=assetshold
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### 4. 権限とディレクトリ設定
+
+```bash
+# アプリケーションディレクトリの所有者を確認・修正
+sudo chown -R $USER:$USER ~/assetshold
+chmod 755 ~/assetshold
+
+# データディレクトリ作成と権限設定
+mkdir -p ~/assetshold/data ~/assetshold/backup
+chmod 755 ~/assetshold/data ~/assetshold/backup
+
+# Node.jsのパス確認
+which node
+which npm
+```
+
+#### 5. サービス起動
 
 ```bash
 # サービス有効化・起動
@@ -224,11 +270,14 @@ sudo systemctl start assetshold
 # ステータス確認
 sudo systemctl status assetshold
 
-# ログ確認
-sudo journalctl -u assetshold -f
+# ログ確認（詳細）
+sudo journalctl -u assetshold -f --no-pager
+
+# サービス起動に失敗した場合の詳細確認
+sudo journalctl -u assetshold --no-pager | tail -20
 ```
 
-#### 5. リバースプロキシ設定（nginx）
+#### 6. リバースプロキシ設定（nginx）
 
 ```bash
 # nginx インストール
@@ -266,7 +315,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-#### 6. ファイアウォール設定
+#### 7. ファイアウォール設定
 
 ```bash
 # ポート3009を直接外部公開しない（nginxのみ）
@@ -275,7 +324,7 @@ sudo ufw allow 80
 sudo ufw --force enable
 ```
 
-#### 7. 運用管理
+#### 8. 運用管理
 
 ```bash
 # サービス再起動
@@ -285,7 +334,7 @@ sudo systemctl restart assetshold
 sudo tail -f /var/log/syslog | grep assetshold
 
 # アプリケーション更新
-cd /home/ubuntu/assetshold
+cd ~/assetshold
 git pull origin master
 cd client && npm run build && cd ..
 sudo systemctl restart assetshold
@@ -308,8 +357,8 @@ sudo nano /usr/local/bin/backup-assetshold.sh
 
 ```bash
 #!/bin/bash
-BACKUP_DIR="/home/ubuntu/assetshold/backup"
-DB_FILE="/home/ubuntu/assetshold/data/portfolio.db"
+BACKUP_DIR="$HOME/assetshold/backup"
+DB_FILE="$HOME/assetshold/data/portfolio.db"
 DATE=$(date +%Y%m%d_%H%M%S)
 
 mkdir -p $BACKUP_DIR
@@ -350,3 +399,77 @@ CSV ファイルのフォーマットが不正な場合、トランザクショ�
 
 - デフォルトユーザー: `admin` / `admin`
 - ブラウザのクッキーをクリアしてからログインし直してください
+
+### Ubuntu systemd サービスエラー
+
+#### エラー: `status=217/USER`
+
+```
+systemd[1]: assetshold.service: Main process exited, code=exited, status=217/USER
+systemd[1]: assetshold.service: Failed to determine user credentials: No such process
+```
+
+**原因**: systemd設定ファイルで指定したユーザーが存在しないか、権限に問題がある
+
+**解決手順**:
+
+1. **ユーザー確認**:
+```bash
+# 現在のユーザー名確認
+whoami
+# ユーザーが存在するか確認
+id $USER
+```
+
+2. **systemdサービスファイル修正**:
+```bash
+sudo nano /etc/systemd/system/assetshold.service
+```
+
+3. **User/Group設定を実際のユーザー名に変更**:
+```ini
+[Service]
+User=actual_username  # whoamiの結果に合わせる
+Group=actual_username
+WorkingDirectory=/home/actual_username/assetshold
+```
+
+4. **権限確認と修正**:
+```bash
+# アプリケーションディレクトリの所有者確認
+ls -la ~/assetshold
+# 必要に応じて所有者修正
+sudo chown -R $USER:$USER ~/assetshold
+```
+
+5. **サービス再読み込み・起動**:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart assetshold
+sudo systemctl status assetshold
+```
+
+#### その他の一般的な問題
+
+**Node.jsパスエラー**:
+```bash
+# Node.jsの実際のパスを確認
+which node
+# systemdサービスファイルのExecStartパスを正しく設定
+ExecStart=/usr/bin/node server.js  # 実際のパスに合わせる
+```
+
+**権限エラー**:
+```bash
+# SQLiteファイルとディレクトリの権限確認
+ls -la ~/assetshold/data/
+chmod 755 ~/assetshold/data
+chmod 644 ~/assetshold/data/portfolio.db  # 存在する場合
+```
+
+**ログ確認**:
+```bash
+# 詳細なエラーログ確認
+sudo journalctl -u assetshold -f --no-pager
+sudo systemctl status assetshold -l
+```

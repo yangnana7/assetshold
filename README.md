@@ -152,6 +152,145 @@ cd client
 npm run dev
 ```
 
+### Ubuntu Server 24.04 での運用
+
+#### 1. システム準備
+
+```bash
+# Node.js 18+ インストール
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# 必要なパッケージ
+sudo apt-get update
+sudo apt-get install -y git sqlite3 build-essential
+
+# アプリケーション取得
+git clone https://github.com/yangnana7/assetshold.git
+cd assetshold
+```
+
+#### 2. 依存関係とビルド
+
+```bash
+# バックエンド依存関係
+npm install
+
+# フロントエンドビルド
+cd client
+npm install
+npm run build
+cd ..
+```
+
+#### 3. systemd サービス設定
+
+```bash
+# サービスファイル作成
+sudo nano /etc/systemd/system/assetshold.service
+```
+
+以下の内容で保存：
+
+```ini
+[Unit]
+Description=Assets Portfolio Management Application
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/assetshold
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=assetshold
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### 4. サービス起動
+
+```bash
+# サービス有効化・起動
+sudo systemctl daemon-reload
+sudo systemctl enable assetshold
+sudo systemctl start assetshold
+
+# ステータス確認
+sudo systemctl status assetshold
+
+# ログ確認
+sudo journalctl -u assetshold -f
+```
+
+#### 5. リバースプロキシ設定（nginx）
+
+```bash
+# nginx インストール
+sudo apt-get install -y nginx
+
+# サイト設定
+sudo nano /etc/nginx/sites-available/assets.local
+```
+
+設定内容：
+
+```nginx
+server {
+    listen 80;
+    server_name assets.local;
+
+    location / {
+        proxy_pass http://localhost:3009;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+```bash
+# サイト有効化
+sudo ln -s /etc/nginx/sites-available/assets.local /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+#### 6. ファイアウォール設定
+
+```bash
+# ポート3009を直接外部公開しない（nginxのみ）
+sudo ufw allow 22
+sudo ufw allow 80
+sudo ufw --force enable
+```
+
+#### 7. 運用管理
+
+```bash
+# サービス再起動
+sudo systemctl restart assetshold
+
+# ログ監視
+sudo tail -f /var/log/syslog | grep assetshold
+
+# アプリケーション更新
+cd /home/ubuntu/assetshold
+git pull origin master
+cd client && npm run build && cd ..
+sudo systemctl restart assetshold
+```
+
 ### CSV ファイル監視
 
 サーバー起動中に `data/portfolio.csv` を編集・保存すると、自動的にデータベースに同期されます。
@@ -159,6 +298,39 @@ npm run dev
 ### バックアップ
 
 アプリケーション停止時に `backup/` ディレクトリに SQLite ファイルがバックアップされます。
+
+#### Ubuntu での自動バックアップ
+
+```bash
+# バックアップスクリプト作成
+sudo nano /usr/local/bin/backup-assetshold.sh
+```
+
+```bash
+#!/bin/bash
+BACKUP_DIR="/home/ubuntu/assetshold/backup"
+DB_FILE="/home/ubuntu/assetshold/data/portfolio.db"
+DATE=$(date +%Y%m%d_%H%M%S)
+
+mkdir -p $BACKUP_DIR
+cp $DB_FILE $BACKUP_DIR/portfolio_${DATE}.db
+
+# 30日以上古いバックアップを削除
+find $BACKUP_DIR -name "portfolio_*.db" -mtime +30 -delete
+```
+
+```bash
+# 実行権限付与
+sudo chmod +x /usr/local/bin/backup-assetshold.sh
+
+# 毎日午前2時にバックアップ実行
+crontab -e
+```
+
+crontabに追加：
+```
+0 2 * * * /usr/local/bin/backup-assetshold.sh
+```
 
 ## トラブルシューティング
 

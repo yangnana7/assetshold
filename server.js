@@ -67,6 +67,26 @@ app.use(session({
   cookie: { secure: false, httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }
 }));
 
+// Function to calculate current market value for assets
+function calculateCurrentValue(asset) {
+  const { class: assetClass, book_value_jpy } = asset;
+  
+  // For demo purposes, we'll use simple multipliers to simulate market changes
+  // In production, you would fetch real market data from APIs
+  const marketMultipliers = {
+    'us_stock': 1.15,      // +15% (typical US stock growth)
+    'jp_stock': 1.08,      // +8% (typical JP stock growth)
+    'precious_metal': 1.12, // +12% (precious metals appreciation)
+    'real_estate': 1.05,   // +5% (real estate appreciation)
+    'watch': 1.20,         // +20% (luxury watches appreciation)
+    'collection': 1.10,    // +10% (collectibles appreciation)
+    'cash': 1.0            // Cash remains same value
+  };
+  
+  const multiplier = marketMultipliers[assetClass] || 1.0;
+  return Math.round(book_value_jpy * multiplier);
+}
+
 // Initialize database schema
 function initDatabase() {
   db.serialize(() => {
@@ -490,7 +510,7 @@ app.delete('/api/users/:id', requireAdmin, (req, res) => {
   });
 });
 
-// Assets CRUD routes
+// Assets CRUD routes with current valuation
 app.get('/api/assets', (req, res) => {
   const { class: assetClass, page = '1', limit = '30' } = req.query;
   const pageNum = parseInt(page);
@@ -557,6 +577,12 @@ app.get('/api/assets', (req, res) => {
                 evaluation: evaluation
               };
             }
+            
+            // Add current market value to asset
+            asset.current_value_jpy = calculateCurrentValue(asset);
+            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+            
             enhancedRows.push(asset);
             completed++;
             if (completed === rows.length) {
@@ -584,6 +610,12 @@ app.get('/api/assets', (req, res) => {
                 evaluation: evaluation
               };
             }
+            
+            // Add current market value to asset
+            asset.current_value_jpy = calculateCurrentValue(asset);
+            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+            
             enhancedRows.push(asset);
             completed++;
             if (completed === rows.length) {
@@ -603,6 +635,11 @@ app.get('/api/assets', (req, res) => {
             }
           });
         } else {
+          // Add current market value to asset
+          asset.current_value_jpy = calculateCurrentValue(asset);
+          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          
           enhancedRows.push(asset);
           completed++;
           if (completed === rows.length) {
@@ -1292,8 +1329,12 @@ setupWalCheckpoints();
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`Portfolio management server running on port ${port}`);
-  console.log(`Dashboard URL: http://localhost:${port}`);
+  console.log(`Primary URL: http://assets.local:${port}`);
+  console.log(`Alternative URL: http://localhost:${port}`);
   console.log(`Network access: http://<server-ip>:${port}`);
+  console.log('\nTo access via assets.local, add this line to your hosts file:');
+  console.log('127.0.0.1 assets.local');
+  console.log('WAL mode enabled for database');
 });
 
 // Graceful shutdown with backup

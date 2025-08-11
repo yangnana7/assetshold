@@ -244,7 +244,7 @@ function Dashboard() {
       )
     }
     
-    return <span className="no-details">-</span>
+    return <div className="no-details">詳細情報なし</div>
   }
 
   return (
@@ -376,34 +376,47 @@ function Dashboard() {
           <div className="no-data">資産データがありません</div>
         ) : (
           <>
-            <div className="assets-table">
-              <div className="table-header">
-                <div>資産名</div>
-                <div>クラス</div>
-                <div>詳細</div>
-                <div>簿価</div>
-                <div>取得日</div>
-                <div>流動性</div>
-              </div>
+            <div className="assets-card-container">
               {assets.map((asset) => (
-                <div key={asset.id} className="table-row">
-                  <div className="asset-name">
-                    {formatAssetName(asset.name, asset.note)}
+                <div key={asset.id} className="asset-card">
+                  <div className="asset-card-left">
+                    <div className="asset-main-info">
+                      <h3 className="asset-name">
+                        {formatAssetName(asset.name, asset.note)}
+                      </h3>
+                      <span className={`asset-class-badge class-${asset.class}`}>
+                        {getAssetClassName(asset.class)}
+                      </span>
+                    </div>
+                    <div className="asset-details-block">
+                      {renderAssetDetails(asset)}
+                    </div>
+                    <div className="asset-meta-info">
+                      <div className="meta-item">
+                        <span className="meta-label">取得日:</span>
+                        <span className="meta-value">
+                          {asset.acquired_at ? new Date(asset.acquired_at).toLocaleDateString() : '-'}
+                        </span>
+                      </div>
+                      <div className="meta-item">
+                        <span className="meta-label">流動性:</span>
+                        <span className={`meta-value liquidity-tier tier-${asset.liquidity_tier}`}>
+                          {getLiquidityTierName(asset.liquidity_tier)}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="asset-class">
-                    {getAssetClassName(asset.class)}
-                  </div>
-                  <div className="asset-details">
-                    {renderAssetDetails(asset)}
-                  </div>
-                  <div className="asset-value">
-                    {formatCurrency(asset.book_value_jpy)}
-                  </div>
-                  <div className="asset-date">
-                    {asset.acquired_at ? new Date(asset.acquired_at).toLocaleDateString() : '-'}
-                  </div>
-                  <div className={`liquidity-tier tier-${asset.liquidity_tier}`}>
-                    {getLiquidityTierName(asset.liquidity_tier)}
+                  <div className="asset-card-right">
+                    <div className={`asset-current-value ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
+                      {formatCurrency(asset.current_value_jpy || asset.book_value_jpy)}
+                    </div>
+                    <div className="asset-book-value">
+                      簿価: {formatCurrency(asset.book_value_jpy)}
+                    </div>
+                    <div className={`asset-gain-loss ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
+                      <div>{formatCurrency(asset.gain_loss_jpy || 0)}</div>
+                      <div className="percentage">({asset.gain_loss_percentage || '0.00'}%)</div>
+                    </div>
                   </div>
                 </div>
               ))}

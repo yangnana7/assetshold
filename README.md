@@ -185,16 +185,27 @@ cd ..
 
 #### 3. systemd サービス設定
 
+**自動設定（推奨）**:
+```bash
+# 自動セットアップスクリプトを実行
+chmod +x setup-service.sh
+./setup-service.sh
+```
+
+**手動設定**:
 ```bash
 # 現在のユーザー名とアプリケーションパスを確認
 whoami
 pwd
 
-# サービスファイル作成
+# 提供されたサービスファイルをシステムにコピー
+sudo cp assetshold.service /etc/systemd/system/
+
+# または手動でサービスファイル作成
 sudo nano /etc/systemd/system/assetshold.service
 ```
 
-以下の内容で保存（**ユーザー名とパスを実際の環境に合わせて変更**）：
+リポジトリに含まれる `assetshold.service` ファイルと `setup-service.sh` スクリプトを使用して自動設定することを推奨します。手動作成する場合は以下の内容で保存（**ユーザー名とパスを実際の環境に合わせて変更**）：
 
 ```ini
 [Unit]
@@ -315,13 +326,29 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-#### 7. ファイアウォール設定
+#### 7. ネットワークアクセス設定
 
+**直接アクセス（開発・テスト用）**:
 ```bash
-# ポート3009を直接外部公開しない（nginxのみ）
+# ポート3009を開放して直接アクセスを許可
+sudo ufw allow 22
+sudo ufw allow 3009
+sudo ufw --force enable
+
+# アクセスURL
+# 同一ネットワーク内から: http://サーバーのIP:3009
+# ローカルから: http://localhost:3009
+```
+
+**nginx経由のアクセス（本番推奨）**:
+```bash
+# nginxのみ外部公開（ポート3009は内部のみ）
 sudo ufw allow 22
 sudo ufw allow 80
 sudo ufw --force enable
+
+# アクセスURL（nginx設定後）
+# http://assets.local または http://サーバーのIP
 ```
 
 #### 8. 運用管理
@@ -411,6 +438,15 @@ systemd[1]: assetshold.service: Failed to determine user credentials: No such pr
 
 **原因**: systemd設定ファイルで指定したユーザーが存在しないか、権限に問題がある
 
+**クイック修正**:
+```bash
+cd ~/assetshold
+git pull origin master  # 最新の修正ファイルを取得
+chmod +x setup-service.sh
+./setup-service.sh
+sudo systemctl start assetshold
+```
+
 **解決手順**:
 
 1. **ユーザー確認**:
@@ -419,34 +455,42 @@ systemd[1]: assetshold.service: Failed to determine user credentials: No such pr
 whoami
 # ユーザーが存在するか確認
 id $USER
+# システムに登録されているユーザー一覧確認
+getent passwd | grep -E ":/home/.*:/bin/(bash|sh)$"
 ```
 
-2. **systemdサービスファイル修正**:
+2. **サービスファイルの自動修正**:
 ```bash
-sudo nano /etc/systemd/system/assetshold.service
+# 現在のユーザー名でサービスファイルを更新
+cd ~/assetshold
+USERNAME=$(whoami)
+sed -i "s/User=yangnana/User=$USERNAME/" assetshold.service
+sed -i "s/Group=yangnana/Group=$USERNAME/" assetshold.service
+sed -i "s|WorkingDirectory=/home/yangnana/assetshold|WorkingDirectory=$PWD|" assetshold.service
+
+# 修正されたファイルをシステムにコピー
+sudo cp assetshold.service /etc/systemd/system/
 ```
 
-3. **User/Group設定を実際のユーザー名に変更**:
-```ini
-[Service]
-User=actual_username  # whoamiの結果に合わせる
-Group=actual_username
-WorkingDirectory=/home/actual_username/assetshold
-```
-
-4. **権限確認と修正**:
+3. **権限確認と修正**:
 ```bash
 # アプリケーションディレクトリの所有者確認
 ls -la ~/assetshold
 # 必要に応じて所有者修正
 sudo chown -R $USER:$USER ~/assetshold
+# データディレクトリの作成と権限設定
+mkdir -p ~/assetshold/data ~/assetshold/backup
+chmod 755 ~/assetshold/data ~/assetshold/backup
 ```
 
-5. **サービス再読み込み・起動**:
+4. **サービス再読み込み・起動**:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart assetshold
 sudo systemctl status assetshold
+
+# 起動確認
+curl http://localhost:3009
 ```
 
 #### その他の一般的な問題

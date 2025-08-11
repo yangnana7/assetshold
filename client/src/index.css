@@ -602,7 +602,7 @@ body {
 
 .assets-table .table-header {
   display: grid;
-  grid-template-columns: 2fr 1fr 1.5fr 1fr 1fr;
+  grid-template-columns: 2fr 1fr 2fr 1.5fr 1fr 1fr;
   gap: 1rem;
   padding: 1rem;
   background-color: #f8f9fa;
@@ -613,11 +613,12 @@ body {
 
 .assets-table .table-row {
   display: grid;
-  grid-template-columns: 2fr 1fr 1.5fr 1fr 1fr;
+  grid-template-columns: 2fr 1fr 2fr 1.5fr 1fr 1fr;
   gap: 1rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid #e9ecef;
   transition: background-color 0.15s ease-in-out;
+  align-items: start;
 }
 
 .assets-table .table-row:last-child {
@@ -743,7 +744,59 @@ body {
   font-style: italic;
 }
 
+/* Asset Details Styles */
+.asset-detail-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.detail-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.detail-label {
+  color: #6c757d;
+  font-weight: 500;
+  white-space: nowrap;
+  min-width: fit-content;
+}
+
+.detail-value {
+  color: #495057;
+  font-weight: 600;
+  text-align: right;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.no-details {
+  color: #6c757d;
+  font-style: italic;
+}
+
 /* Mobile responsive for assets table */
+@media (max-width: 1024px) {
+  .assets-table .table-header {
+    grid-template-columns: 2fr 1fr 2fr 1.2fr 1fr;
+    gap: 0.5rem;
+  }
+  
+  .assets-table .table-row {
+    grid-template-columns: 2fr 1fr 2fr 1.2fr 1fr;
+    gap: 0.5rem;
+  }
+  
+  /* Hide acquisition date on tablets */
+  .assets-table .table-header > div:nth-child(5),
+  .assets-table .table-row > div:nth-child(5) {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
   .assets-table .table-header,
   .assets-table .table-row {

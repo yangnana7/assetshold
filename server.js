@@ -524,28 +524,26 @@ app.get('/api/assets', (req, res) => {
         return res.status(500).json({ error: err.message });
       }
       
-      // For paginated requests, return simple structure without enhanced details
-      if (req.query.page) {
-        return res.json({
-          assets: rows,
-          pagination: {
-            page: pageNum,
-            limit: limitNum,
-            total: total,
-            totalPages: totalPages
-          }
-        });
-      }
-      
-      // Legacy behavior for non-paginated requests (for compatibility)
-      // Enhance assets with class-specific details for evaluation display
+      // Enhanced data processing for both paginated and non-paginated requests
       const enhancedRows = [];
       let completed = 0;
       
       if (rows.length === 0) {
-        return res.json(rows);
+        if (req.query.page) {
+          return res.json({
+            assets: [],
+            pagination: {
+              page: pageNum,
+              limit: limitNum,
+              total: total,
+              totalPages: totalPages
+            }
+          });
+        }
+        return res.json([]);
       }
       
+      // Process assets with enhanced details
       rows.forEach(asset => {
         if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
           const table = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
@@ -562,7 +560,19 @@ app.get('/api/assets', (req, res) => {
             enhancedRows.push(asset);
             completed++;
             if (completed === rows.length) {
-              res.json(enhancedRows);
+              if (req.query.page) {
+                res.json({
+                  assets: enhancedRows,
+                  pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: total,
+                    totalPages: totalPages
+                  }
+                });
+              } else {
+                res.json(enhancedRows);
+              }
             }
           });
         } else if (asset.class === 'precious_metal') {
@@ -577,14 +587,38 @@ app.get('/api/assets', (req, res) => {
             enhancedRows.push(asset);
             completed++;
             if (completed === rows.length) {
-              res.json(enhancedRows);
+              if (req.query.page) {
+                res.json({
+                  assets: enhancedRows,
+                  pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: total,
+                    totalPages: totalPages
+                  }
+                });
+              } else {
+                res.json(enhancedRows);
+              }
             }
           });
         } else {
           enhancedRows.push(asset);
           completed++;
           if (completed === rows.length) {
-            res.json(enhancedRows);
+            if (req.query.page) {
+              res.json({
+                assets: enhancedRows,
+                pagination: {
+                  page: pageNum,
+                  limit: limitNum,
+                  total: total,
+                  totalPages: totalPages
+                }
+              });
+            } else {
+              res.json(enhancedRows);
+            }
           }
         }
       });

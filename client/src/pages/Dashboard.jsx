@@ -177,6 +177,76 @@ function Dashboard() {
     return pages
   }
 
+  const renderAssetDetails = (asset) => {
+    if (asset.class === 'us_stock' && asset.stock_details) {
+      const { quantity, avg_price_usd, ticker } = asset.stock_details
+      return (
+        <div className="asset-detail-info">
+          <div className="detail-line">
+            <span className="detail-label">ティッカー:</span>
+            <span className="detail-value">{ticker}</span>
+          </div>
+          <div className="detail-line">
+            <span className="detail-label">株数:</span>
+            <span className="detail-value">{quantity?.toLocaleString()}株</span>
+          </div>
+          <div className="detail-line">
+            <span className="detail-label">平均単価:</span>
+            <span className="detail-value">${avg_price_usd?.toFixed(2)}</span>
+          </div>
+        </div>
+      )
+    }
+    
+    if (asset.class === 'jp_stock' && asset.stock_details) {
+      const { quantity, avg_price_jpy, code } = asset.stock_details
+      return (
+        <div className="asset-detail-info">
+          <div className="detail-line">
+            <span className="detail-label">コード:</span>
+            <span className="detail-value">{code}</span>
+          </div>
+          <div className="detail-line">
+            <span className="detail-label">株数:</span>
+            <span className="detail-value">{quantity?.toLocaleString()}株</span>
+          </div>
+          <div className="detail-line">
+            <span className="detail-label">平均単価:</span>
+            <span className="detail-value">¥{avg_price_jpy?.toLocaleString()}</span>
+          </div>
+        </div>
+      )
+    }
+    
+    if (asset.class === 'precious_metal' && asset.precious_metal_details) {
+      const { metal, weight_g, unit_price_jpy, purity } = asset.precious_metal_details
+      return (
+        <div className="asset-detail-info">
+          <div className="detail-line">
+            <span className="detail-label">金属:</span>
+            <span className="detail-value">{metal}</span>
+          </div>
+          <div className="detail-line">
+            <span className="detail-label">重量:</span>
+            <span className="detail-value">{weight_g}g</span>
+          </div>
+          <div className="detail-line">
+            <span className="detail-label">単価:</span>
+            <span className="detail-value">¥{unit_price_jpy?.toLocaleString()}/g</span>
+          </div>
+          {purity && (
+            <div className="detail-line">
+              <span className="detail-label">純度:</span>
+              <span className="detail-value">{purity}</span>
+            </div>
+          )}
+        </div>
+      )
+    }
+    
+    return <span className="no-details">-</span>
+  }
+
   return (
     <div className="container">
       <div className="dashboard-grid">
@@ -310,6 +380,7 @@ function Dashboard() {
               <div className="table-header">
                 <div>資産名</div>
                 <div>クラス</div>
+                <div>詳細</div>
                 <div>簿価</div>
                 <div>取得日</div>
                 <div>流動性</div>
@@ -321,6 +392,9 @@ function Dashboard() {
                   </div>
                   <div className="asset-class">
                     {getAssetClassName(asset.class)}
+                  </div>
+                  <div className="asset-details">
+                    {renderAssetDetails(asset)}
                   </div>
                   <div className="asset-value">
                     {formatCurrency(asset.book_value_jpy)}

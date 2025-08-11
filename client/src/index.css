@@ -593,28 +593,274 @@ body {
   color: #6c757d;
 }
 
-.assets-table {
-  border: 1px solid #e9ecef;
-  border-radius: 4px;
-  overflow: hidden;
+/* Multi-layer Card Layout */
+.assets-card-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
   margin-bottom: 1rem;
+}
+
+.asset-card {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  background: white;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  transition: box-shadow 0.2s ease-in-out;
+}
+
+.asset-card:hover {
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* Left Column - Asset Details */
+.asset-card-left {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.asset-main-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.asset-main-info .asset-name {
+  font-size: 1.2em;
+  font-weight: bold;
+  color: #2c3e50;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.asset-class-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 16px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+  margin-top: 0.2rem;
+}
+
+/* Asset class specific badge colors */
+.asset-class-badge.class-us_stock {
+  background-color: #e3f2fd;
+  color: #1976d2;
+}
+
+.asset-class-badge.class-jp_stock {
+  background-color: #fce4ec;
+  color: #c2185b;
+}
+
+.asset-class-badge.class-precious_metal {
+  background-color: #fff3e0;
+  color: #f57c00;
+}
+
+.asset-class-badge.class-watch {
+  background-color: #f3e5f5;
+  color: #7b1fa2;
+}
+
+.asset-class-badge.class-collection {
+  background-color: #e8f5e8;
+  color: #388e3c;
+}
+
+.asset-class-badge.class-cash {
+  background-color: #f5f5f5;
+  color: #616161;
+}
+
+.asset-class-badge.class-real_estate {
+  background-color: #fff8e1;
+  color: #f9a825;
+}
+
+.asset-details-block {
+  background-color: #fcfcfc;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #f0f0f0;
+}
+
+.asset-details-block .asset-detail-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.asset-details-block .detail-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.asset-details-block .detail-label {
+  color: #888;
+  font-size: 0.85rem;
+  margin-right: 0.5rem;
+  flex-shrink: 0;
+}
+
+.asset-details-block .detail-value {
+  color: #333;
+  font-size: 0.85rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  text-align: right;
+}
+
+.asset-details-block .no-details {
+  color: #999;
+  font-style: italic;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.asset-meta-info {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 0.5rem;
+}
+
+.meta-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.meta-label {
+  font-size: 0.85em;
+  color: #777;
+  font-weight: 500;
+}
+
+.meta-value {
+  font-size: 0.85em;
+  color: #555;
+}
+
+/* Right Column - Financial Summary */
+.asset-card-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  text-align: right;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.asset-card-right .asset-current-value {
+  font-size: 1.3em;
+  font-weight: bold;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  line-height: 1.2;
+}
+
+.asset-card-right .asset-current-value.positive {
+  color: #dc3545;
+}
+
+.asset-card-right .asset-current-value.negative {
+  color: #28a745;
+}
+
+.asset-card-right .asset-book-value {
+  font-size: 0.9em;
+  color: #666;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.asset-card-right .asset-gain-loss {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.asset-card-right .asset-gain-loss.positive {
+  color: #dc3545;
+}
+
+.asset-card-right .asset-gain-loss.negative {
+  color: #28a745;
+}
+
+.asset-card-right .asset-gain-loss .percentage {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+/* Responsive Design for Cards */
+@media (max-width: 768px) {
+  .asset-card {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    padding: 1rem;
+  }
+  
+  .asset-card-right {
+    align-items: flex-start;
+    text-align: left;
+  }
+  
+  .asset-card-right .asset-current-value {
+    font-size: 1.1em;
+  }
+  
+  .asset-meta-info {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  
+  .asset-main-info {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  
+  .asset-class-badge {
+    margin-top: 0;
+  }
 }
 
 .assets-table .table-header {
   display: grid;
-  grid-template-columns: 2fr 1fr 2fr 1.5fr 1fr 1fr;
-  gap: 1rem;
+  grid-template-columns: 1.8fr 0.8fr 1.5fr 1fr 1fr 1.2fr 0.8fr 0.7fr;
+  gap: 0.75rem;
   padding: 1rem;
   background-color: #f8f9fa;
   font-weight: 600;
   color: #495057;
   border-bottom: 1px solid #e9ecef;
+  font-size: 0.875rem;
+}
+
+.assets-table .table-header > div {
+  text-align: right;
+}
+
+.assets-table .table-header > div:first-child {
+  text-align: left;
 }
 
 .assets-table .table-row {
   display: grid;
-  grid-template-columns: 2fr 1fr 2fr 1.5fr 1fr 1fr;
-  gap: 1rem;
+  grid-template-columns: 1.8fr 0.8fr 1.5fr 1fr 1fr 1.2fr 0.8fr 0.7fr;
+  gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid #e9ecef;
   transition: background-color 0.15s ease-in-out;
@@ -641,9 +887,42 @@ body {
 
 .assets-table .asset-value {
   font-weight: 600;
-  color: #28a745;
+  color: #000000;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   text-align: right;
+}
+
+.assets-table .asset-current-value {
+  font-weight: 600;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  text-align: right;
+}
+
+.assets-table .asset-current-value.positive {
+  color: #dc3545;
+}
+
+.assets-table .asset-current-value.negative {
+  color: #28a745;
+}
+
+.assets-table .asset-gain-loss {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  text-align: right;
+  font-weight: 600;
+}
+
+.assets-table .asset-gain-loss.positive {
+  color: #dc3545;
+}
+
+.assets-table .asset-gain-loss.negative {
+  color: #28a745;
+}
+
+.assets-table .asset-gain-loss .percentage {
+  font-size: 0.85em;
+  opacity: 0.8;
 }
 
 .assets-table .asset-date {
@@ -750,6 +1029,8 @@ body {
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.75rem;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .detail-line {
@@ -757,6 +1038,8 @@ body {
   justify-content: space-between;
   gap: 0.5rem;
   align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .detail-label {
@@ -771,6 +1054,9 @@ body {
   font-weight: 600;
   text-align: right;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
 }
 
 .no-details {
@@ -779,20 +1065,42 @@ body {
 }
 
 /* Mobile responsive for assets table */
-@media (max-width: 1024px) {
+@media (max-width: 1200px) {
   .assets-table .table-header {
-    grid-template-columns: 2fr 1fr 2fr 1.2fr 1fr;
+    grid-template-columns: 1.5fr 1fr 1.5fr 1fr 1fr 1.2fr 1fr;
     gap: 0.5rem;
+    font-size: 0.875rem;
   }
   
   .assets-table .table-row {
-    grid-template-columns: 2fr 1fr 2fr 1.2fr 1fr;
+    grid-template-columns: 1.5fr 1fr 1.5fr 1fr 1fr 1.2fr 1fr;
     gap: 0.5rem;
   }
   
   /* Hide acquisition date on tablets */
-  .assets-table .table-header > div:nth-child(5),
-  .assets-table .table-row > div:nth-child(5) {
+  .assets-table .table-header > div:nth-child(7),
+  .assets-table .table-row > div:nth-child(7) {
+    display: none;
+  }
+}
+
+@media (max-width: 1024px) {
+  .assets-table .table-header {
+    grid-template-columns: 1.5fr 1fr 1fr 1fr 1.2fr 1fr;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+  }
+  
+  .assets-table .table-row {
+    grid-template-columns: 1.5fr 1fr 1fr 1fr 1.2fr 1fr;
+    gap: 0.5rem;
+  }
+  
+  /* Hide details and acquisition date on tablets */
+  .assets-table .table-header > div:nth-child(3),
+  .assets-table .table-row > div:nth-child(3),
+  .assets-table .table-header > div:nth-child(7),
+  .assets-table .table-row > div:nth-child(7) {
     display: none;
   }
 }

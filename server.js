@@ -20,6 +20,14 @@ if (parseInt(port) !== REQUIRED_PORT) {
   process.exit(1);
 }
 
+// Market data configuration
+const MARKET_ENABLE = process.env.MARKET_ENABLE === '1';
+console.log(`Market data: ${MARKET_ENABLE ? 'enabled' : 'disabled'}`);
+
+if (!MARKET_ENABLE) {
+  console.log('External market data fetching is disabled. Use MARKET_ENABLE=1 to enable.');
+}
+
 const app = express();
 
 // Database initialization
@@ -67,6 +75,101 @@ app.use(session({
   cookie: { secure: false, httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }
 }));
 
+// Market data providers (BDD requirement 4.3)
+const { makeStockProvider, makeFxProvider } = require('./providers/registry');
+
+// Initialize providers
+const stockProvider = makeStockProvider(MARKET_ENABLE);
+const fxProvider = makeFxProvider(MARKET_ENABLE);
+
+// Cache strategy implementation (BDD requirement 4.4)
+const CACHE_TTL = {
+  stock: 15 * 60 * 1000,  // 15 minutes
+  fx: 5 * 60 * 1000       // 5 minutes
+};
+
+// In-memory lock for concurrent request aggregation
+const fetchLocks = new Map();
+
+async function getCachedPrice(key, ttl) {
+  return new Promise((resolve, reject) => {
+    db.get('SELECT * FROM price_cache WHERE key = ?', [key], (err, row) => {
+      if (err) return reject(err);
+      
+      if (!row) return resolve(null);
+      
+      const fetchedAt = new Date(row.fetched_at);
+      const now = new Date();
+      const isExpired = (now - fetchedAt) > ttl;
+      
+      resolve({
+        data: JSON.parse(row.payload),
+        stale: isExpired,
+        fetchedAt: fetchedAt
+      });
+    });
+  });
+}
+
+function setCachedPrice(key, payload) {
+  const fetchedAt = new Date().toISOString();
+  const payloadJson = JSON.stringify(payload);
+  
+  db.run(
+    'INSERT OR REPLACE INTO price_cache (key, payload, fetched_at) VALUES (?, ?, ?)',
+    [key, payloadJson, fetchedAt],
+    (err) => {
+      if (err) {
+        console.error('Failed to cache price data:', err);
+      }
+    }
+  );
+}
+
+async function fetchWithCache(key, ttl, fetchFn) {
+  // Check for concurrent request lock
+  if (fetchLocks.has(key)) {
+    return fetchLocks.get(key);
+  }
+
+  try {
+    // Check cache first
+    const cached = await getCachedPrice(key, ttl);
+    
+    if (cached && !cached.stale) {
+      return { ...cached.data, stale: false };
+    }
+
+    // Create fetch promise and add to locks
+    const fetchPromise = (async () => {
+      try {
+        const data = await fetchFn();
+        setCachedPrice(key, data);
+        return { ...data, stale: false };
+      } catch (error) {
+        // If fetch fails and we have cached data, return it as stale
+        if (cached) {
+          console.log(`Using stale cache for ${key}:`, error.message);
+          return { ...cached.data, stale: true };
+        }
+        throw error;
+      }
+    })();
+
+    fetchLocks.set(key, fetchPromise);
+    
+    try {
+      const result = await fetchPromise;
+      return result;
+    } finally {
+      fetchLocks.delete(key);
+    }
+  } catch (error) {
+    fetchLocks.delete(key);
+    throw error;
+  }
+}
+
 // Function to calculate current market value for assets
 function calculateCurrentValue(asset) {
   const { class: assetClass, book_value_jpy } = asset;
@@ -85,6 +188,81 @@ function calculateCurrentValue(asset) {
   
   const multiplier = marketMultipliers[assetClass] || 1.0;
   return Math.round(book_value_jpy * multiplier);
+}
+
+// Valuation calculation rules (BDD requirement 4.6)
+function roundDown2(x) {
+  return Math.floor(x * 100) / 100;
+}
+
+async function calculateMarketValue(asset) {
+  const assetClass = asset.class;
+  
+  try {
+    if (assetClass === 'us_stock' && asset.stock_details) {
+      const { ticker, quantity } = asset.stock_details;
+      const key = `stock:US:${ticker}`;
+      
+      // Get USD price
+      const priceData = await fetchWithCache(key, CACHE_TTL.stock, 
+        () => stockProvider.getQuote(ticker, 'US')
+      );
+      
+      // Get USDJPY rate
+      const fxKey = 'fx:USDJPY';
+      const fxData = await fetchWithCache(fxKey, CACHE_TTL.fx,
+        () => fxProvider.getRate('USDJPY')
+      );
+      
+      const valueJpy = roundDown2(priceData.price * quantity * fxData.price);
+      const fxContext = `USDJPY@${fxData.price}(${fxData.asOf})`;
+      
+      return {
+        value_jpy: Math.floor(valueJpy),
+        as_of: priceData.asOf,
+        fx_context: fxContext,
+        stale: priceData.stale || fxData.stale
+      };
+    }
+    
+    if (assetClass === 'jp_stock' && asset.stock_details) {
+      const { code, quantity } = asset.stock_details;
+      const key = `stock:JP:${code}`;
+      
+      const priceData = await fetchWithCache(key, CACHE_TTL.stock,
+        () => stockProvider.getQuote(code, 'JP')
+      );
+      
+      const valueJpy = roundDown2(priceData.price * quantity);
+      
+      return {
+        value_jpy: Math.floor(valueJpy),
+        as_of: priceData.asOf,
+        fx_context: null,
+        stale: priceData.stale
+      };
+    }
+    
+    if (assetClass === 'precious_metal' && asset.precious_metal_details) {
+      // For precious metals, we might use spot prices
+      // For now, return the current static calculation
+      return {
+        value_jpy: asset.book_value_jpy,
+        as_of: new Date().toISOString(),
+        fx_context: null,
+        stale: false
+      };
+    }
+    
+    // For other asset classes (watch, collection, real_estate), default to manual
+    throw new Error(`Market valuation not supported for asset class: ${assetClass}`);
+    
+  } catch (error) {
+    if (error.message.includes('Market data is disabled')) {
+      throw { code: 'market_disabled', message: 'Market data fetching is disabled' };
+    }
+    throw { code: 'upstream_unavailable', message: error.message };
+  }
 }
 
 // Initialize database schema
@@ -113,6 +291,13 @@ function initDatabase() {
       value_jpy INTEGER NOT NULL,
       fx_context TEXT,
       FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    )`);
+
+    // Price cache table for market data (BDD requirement 4.2)
+    db.run(`CREATE TABLE IF NOT EXISTS price_cache (
+      key TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      fetched_at TEXT NOT NULL
     )`);
 
     // US Stocks table
@@ -1147,6 +1332,111 @@ app.get('/api/export', requireAuth, (req, res) => {
       .catch(error => {
         res.status(500).json({ error: error.message });
       });
+  });
+});
+
+// Market data API endpoints (BDD requirement 4.5)
+
+// POST /api/valuations/:assetId/refresh - No auth required for guest users
+app.post('/api/valuations/:assetId/refresh', async (req, res) => {
+  if (!MARKET_ENABLE) {
+    return res.status(403).json({ code: 'market_disabled', message: 'Market data is disabled' });
+  }
+
+  const assetId = parseInt(req.params.assetId);
+  
+  try {
+    // Get asset with details
+    db.get('SELECT * FROM assets WHERE id = ?', [assetId], async (err, asset) => {
+      if (err || !asset) {
+        return res.status(404).json({ error: 'Asset not found' });
+      }
+
+      try {
+        // Get stock/precious metal details if applicable
+        if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+          const table = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
+          db.get(`SELECT * FROM ${table} WHERE asset_id = ?`, [assetId], async (err, details) => {
+            if (err || !details) {
+              return res.status(400).json({ error: 'Stock details not found' });
+            }
+
+            asset.stock_details = details;
+            await processMarketValuation(asset, req, res);
+          });
+        } else if (asset.class === 'precious_metal') {
+          db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [assetId], async (err, details) => {
+            if (err || !details) {
+              return res.status(400).json({ error: 'Precious metal details not found' });
+            }
+
+            asset.precious_metal_details = details;
+            await processMarketValuation(asset, req, res);
+          });
+        } else {
+          return res.status(400).json({ error: `Market valuation not supported for asset class: ${asset.class}` });
+        }
+      } catch (error) {
+        console.error('Market valuation error:', error);
+        if (error.code === 'market_disabled') {
+          return res.status(403).json(error);
+        } else if (error.code === 'upstream_unavailable') {
+          return res.status(502).json(error);
+        }
+        return res.status(500).json({ error: 'Internal server error' });
+      }
+    });
+  } catch (error) {
+    console.error('Valuation refresh error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+async function processMarketValuation(asset, req, res) {
+  try {
+    const valuation = await calculateMarketValue(asset);
+    
+    // Save to valuations table
+    db.run(
+      'INSERT INTO valuations (asset_id, as_of, value_jpy, fx_context) VALUES (?, ?, ?, ?)',
+      [asset.id, valuation.as_of, valuation.value_jpy, valuation.fx_context],
+      function(err) {
+        if (err) {
+          console.error('Failed to save valuation:', err);
+          return res.status(500).json({ error: 'Failed to save valuation' });
+        }
+
+        // Log audit - use session user if available, otherwise guest
+        logAudit('assets', asset.id, 'valuation_refresh', null, valuation, 
+          req.session.user ? req.session.user.id : 'guest');
+
+        res.json({
+          value_jpy: valuation.value_jpy,
+          as_of: valuation.as_of,
+          fx_context: valuation.fx_context,
+          stale: valuation.stale
+        });
+      }
+    );
+  } catch (error) {
+    if (error.code === 'market_disabled') {
+      return res.status(403).json(error);
+    } else if (error.code === 'upstream_unavailable') {
+      return res.status(502).json(error);
+    }
+    return res.status(500).json({ error: error.message });
+  }
+}
+
+// GET /api/market/status
+app.get('/api/market/status', (req, res) => {
+  res.json({
+    enabled: MARKET_ENABLE,
+    provider: {
+      stock: stockProvider.name,
+      fx: fxProvider.name
+    },
+    now: new Date().toISOString()
   });
 });
 

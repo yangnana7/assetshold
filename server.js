@@ -346,7 +346,6 @@ app.get('/api/assets', (req, res) => {
               evaluation: evaluation
             };
           }
-          }
           enhancedRows.push(asset);
           completed++;
           if (completed === rows.length) {
@@ -361,7 +360,6 @@ app.get('/api/assets', (req, res) => {
               ...details,
               evaluation: evaluation
             };
-          }
           }
           enhancedRows.push(asset);
           completed++;

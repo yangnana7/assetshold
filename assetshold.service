@@ -1,0 +1,20 @@
+[Unit]
+Description=Assets Portfolio Management Application
+After=network.target
+
+[Service]
+Type=simple
+User=yangnana
+Group=yangnana
+WorkingDirectory=/home/yangnana/assetshold
+Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/usr/local/bin
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=assetshold
+
+[Install]
+WantedBy=multi-user.target

@@ -2,6 +2,7 @@
 
 const { NoopProvider, NoopFxProvider } = require('./base');
 const { YahooStockProvider, YahooFxProvider } = require('./yahoo');
+const { TanakaPreciousMetalProvider } = require('./tanaka');
 
 function makeStockProvider(marketEnable = false) {
   if (!marketEnable) {
@@ -34,7 +35,23 @@ function makeFxProvider(marketEnable = false) {
   }
 }
 
+function makePreciousMetalProvider(marketEnable = false) {
+  if (!marketEnable) {
+    console.log('Precious Metal provider: noop (market disabled)');
+    return new NoopProvider();
+  }
+
+  try {
+    console.log('Precious Metal provider: tanaka');
+    return new TanakaPreciousMetalProvider();
+  } catch (error) {
+    console.log('Precious Metal provider: noop (tanaka unavailable)');
+    return new NoopProvider();
+  }
+}
+
 module.exports = {
   makeStockProvider,
-  makeFxProvider
+  makeFxProvider,
+  makePreciousMetalProvider
 };

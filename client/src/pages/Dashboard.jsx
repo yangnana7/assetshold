@@ -81,22 +81,31 @@ function Dashboard() {
     }
   }
 
-  const refreshAssetValuation = async (assetId) => {
+
+  const refreshAllMarketData = async () => {
     try {
-      const response = await axios.post(`/api/valuations/${assetId}/refresh`)
-      console.log('Valuation refreshed:', response.data)
-      // Optionally refresh the assets list
-      fetchAssets(currentPage)
+      setMarketLoading(true)
+      const response = await axios.post('/api/valuations/refresh-all')
+      console.log('All market data refreshed:', response.data)
+      
+      // Show success message
+      alert(`市場データを更新しました。更新件数: ${response.data.updated || 0}件`)
+      
+      // Refresh the assets list and dashboard data
+      await fetchAssets(currentPage)
+      await fetchDashboardData()
     } catch (error) {
-      console.error('Valuation refresh error:', error)
+      console.error('Bulk valuation refresh error:', error)
       // Handle different error codes
       if (error.response?.data?.code === 'market_disabled') {
         alert('市場データが無効になっています')
       } else if (error.response?.data?.code === 'upstream_unavailable') {
         alert('市場データの取得に失敗しました')
       } else {
-        alert('評価額の更新に失敗しました')
+        alert('市場データの更新に失敗しました')
       }
+    } finally {
+      setMarketLoading(false)
     }
   }
 
@@ -291,11 +300,23 @@ function Dashboard() {
           <div className={`market-status-indicator ${marketStatus.enabled ? 'enabled' : 'disabled'}`}>
             市場データ: {marketStatus.enabled ? '有効' : '無効'}
           </div>
-          {marketStatus.enabled && (
-            <div className="market-providers">
-              Stock: {marketStatus.provider.stock} | FX: {marketStatus.provider.fx}
-            </div>
-          )}
+          <div className="market-status-controls">
+            {marketStatus.enabled && (
+              <div className="market-providers">
+                Stock: {marketStatus.provider.stock} | FX: {marketStatus.provider.fx} | Precious Metal: {marketStatus.provider.precious_metal}
+              </div>
+            )}
+            {marketStatus.enabled && (
+              <button 
+                className="market-refresh-all-btn"
+                onClick={refreshAllMarketData}
+                disabled={marketLoading}
+                title="全ての市場データを更新（米国株・日本株・貴金属）"
+              >
+                {marketLoading ? '更新中...' : '市場更新'}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -467,15 +488,6 @@ function Dashboard() {
                       <div>{formatCurrency(asset.gain_loss_jpy || 0)}</div>
                       <div className="percentage">({asset.gain_loss_percentage || '0.00'}%)</div>
                     </div>
-                    {marketStatus?.enabled && (asset.class === 'us_stock' || asset.class === 'jp_stock') && (
-                      <button 
-                        className="refresh-valuation-btn"
-                        onClick={() => refreshAssetValuation(asset.id)}
-                        title="市場価格を更新"
-                      >
-                        🔄
-                      </button>
-                    )}
                   </div>
                 </div>
               ))}

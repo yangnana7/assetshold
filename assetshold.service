@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=yangnana
-Group=yangnana
-WorkingDirectory=/home/yangnana/assetshold
+User=yang_server
+Group=yang_server
+WorkingDirectory=/home/yang_server/assetshold
 Environment=NODE_ENV=production
 Environment=PATH=/usr/bin:/usr/local/bin
 Environment=MARKET_ENABLE=1

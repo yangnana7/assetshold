@@ -7,10 +7,24 @@ function Dashboard() {
   const [dashboardData, setDashboardData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  
+  // Asset list states
+  const [assets, setAssets] = useState([])
+  const [assetsLoading, setAssetsLoading] = useState(false)
+  const [assetsError, setAssetsError] = useState(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalAssetCount, setTotalAssetCount] = useState(0)
+  const ASSETS_PER_PAGE = 30
 
   useEffect(() => {
     fetchDashboardData()
+    fetchAssets(1)
   }, [])
+
+  useEffect(() => {
+    fetchAssets(currentPage)
+  }, [currentPage])
 
   const fetchDashboardData = async () => {
     try {
@@ -21,6 +35,32 @@ function Dashboard() {
       console.error('Dashboard fetch error:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchAssets = async (page) => {
+    try {
+      setAssetsLoading(true)
+      setAssetsError(null)
+      const response = await axios.get(`/api/assets?page=${page}&limit=${ASSETS_PER_PAGE}`)
+      
+      if (response.data.assets) {
+        // Paginated response
+        setAssets(response.data.assets)
+        setCurrentPage(response.data.pagination.page)
+        setTotalPages(response.data.pagination.totalPages)
+        setTotalAssetCount(response.data.pagination.total)
+      } else {
+        // Legacy response (non-paginated)
+        setAssets(response.data)
+        setTotalPages(1)
+        setTotalAssetCount(response.data.length)
+      }
+    } catch (error) {
+      setAssetsError('資産データの取得に失敗しました')
+      console.error('Assets fetch error:', error)
+    } finally {
+      setAssetsLoading(false)
     }
   }
 
@@ -50,6 +90,92 @@ function Dashboard() {
 
   // Colors for pie chart
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658']
+
+  // Pagination handlers
+  const handlePageChange = (newPage) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage)
+    }
+  }
+
+  const renderPagination = () => {
+    if (totalPages <= 1) return null
+
+    const pages = []
+    const startPage = Math.max(1, currentPage - 2)
+    const endPage = Math.min(totalPages, currentPage + 2)
+
+    // Previous button
+    pages.push(
+      <button
+        key="prev"
+        onClick={() => handlePageChange(currentPage - 1)}
+        disabled={currentPage === 1}
+        className={`pagination-btn ${currentPage === 1 ? 'disabled' : ''}`}
+      >
+        &lt;
+      </button>
+    )
+
+    // First page
+    if (startPage > 1) {
+      pages.push(
+        <button
+          key={1}
+          onClick={() => handlePageChange(1)}
+          className={`pagination-btn ${currentPage === 1 ? 'active' : ''}`}
+        >
+          1
+        </button>
+      )
+      if (startPage > 2) {
+        pages.push(<span key="ellipsis1" className="pagination-ellipsis">...</span>)
+      }
+    }
+
+    // Page numbers
+    for (let i = startPage; i <= endPage; i++) {
+      pages.push(
+        <button
+          key={i}
+          onClick={() => handlePageChange(i)}
+          className={`pagination-btn ${i === currentPage ? 'active' : ''}`}
+        >
+          {i}
+        </button>
+      )
+    }
+
+    // Last page
+    if (endPage < totalPages) {
+      if (endPage < totalPages - 1) {
+        pages.push(<span key="ellipsis2" className="pagination-ellipsis">...</span>)
+      }
+      pages.push(
+        <button
+          key={totalPages}
+          onClick={() => handlePageChange(totalPages)}
+          className={`pagination-btn ${currentPage === totalPages ? 'active' : ''}`}
+        >
+          {totalPages}
+        </button>
+      )
+    }
+
+    // Next button
+    pages.push(
+      <button
+        key="next"
+        onClick={() => handlePageChange(currentPage + 1)}
+        disabled={currentPage === totalPages}
+        className={`pagination-btn ${currentPage === totalPages ? 'disabled' : ''}`}
+      >
+        &gt;
+      </button>
+    )
+
+    return pages
+  }
 
   return (
     <div className="container">
@@ -163,6 +289,59 @@ function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Assets List Section */}
+      <div className="card" style={{ marginTop: '2rem' }}>
+        <h3>資産一覧</h3>
+        <div className="assets-list-info">
+          <span>総件数: {totalAssetCount}件</span>
+          <span>ページ: {currentPage} / {totalPages}</span>
+        </div>
+        
+        {assetsLoading ? (
+          <div className="loading">読み込み中...</div>
+        ) : assetsError ? (
+          <div className="error">{assetsError}</div>
+        ) : assets.length === 0 ? (
+          <div className="no-data">資産データがありません</div>
+        ) : (
+          <>
+            <div className="assets-table">
+              <div className="table-header">
+                <div>資産名</div>
+                <div>クラス</div>
+                <div>簿価</div>
+                <div>取得日</div>
+                <div>流動性</div>
+              </div>
+              {assets.map((asset) => (
+                <div key={asset.id} className="table-row">
+                  <div className="asset-name">
+                    {formatAssetName(asset.name, asset.note)}
+                  </div>
+                  <div className="asset-class">
+                    {getAssetClassName(asset.class)}
+                  </div>
+                  <div className="asset-value">
+                    {formatCurrency(asset.book_value_jpy)}
+                  </div>
+                  <div className="asset-date">
+                    {asset.acquired_at ? new Date(asset.acquired_at).toLocaleDateString() : '-'}
+                  </div>
+                  <div className={`liquidity-tier tier-${asset.liquidity_tier}`}>
+                    {getLiquidityTierName(asset.liquidity_tier)}
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            {/* Pagination */}
+            <div className="pagination">
+              {renderPagination()}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -179,6 +358,17 @@ function getAssetClassName(classKey) {
   }
   
   return classNames[classKey] || classKey
+}
+
+function getLiquidityTierName(tier) {
+  const tierNames = {
+    'high': '高',
+    'medium': '中',
+    'low': '低',
+    'very-low': '極低'
+  }
+  
+  return tierNames[tier] || tier
 }
 
 export default Dashboard

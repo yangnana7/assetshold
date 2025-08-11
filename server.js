@@ -492,71 +492,102 @@ app.delete('/api/users/:id', requireAdmin, (req, res) => {
 
 // Assets CRUD routes
 app.get('/api/assets', (req, res) => {
-  const { class: assetClass } = req.query;
-  let query = 'SELECT * FROM assets';
+  const { class: assetClass, page = '1', limit = '30' } = req.query;
+  const pageNum = parseInt(page);
+  const limitNum = parseInt(limit);
+  const offset = (pageNum - 1) * limitNum;
+  
+  let baseQuery = 'SELECT * FROM assets';
+  let countQuery = 'SELECT COUNT(*) as total FROM assets';
   let params = [];
   
   if (assetClass) {
-    query += ' WHERE class = ?';
+    baseQuery += ' WHERE class = ?';
+    countQuery += ' WHERE class = ?';
     params.push(assetClass);
   }
   
-  query += ' ORDER BY created_at DESC';
+  baseQuery += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   
-  db.all(query, params, (err, rows) => {
+  // First get total count
+  db.get(countQuery, params, (err, countResult) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
     
-    // Enhance assets with class-specific details for evaluation display
-    const enhancedRows = [];
-    let completed = 0;
+    const total = countResult.total;
+    const totalPages = Math.ceil(total / limitNum);
     
-    if (rows.length === 0) {
-      return res.json(rows);
-    }
-    
-    rows.forEach(asset => {
-      if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
-        const table = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
-        const priceField = asset.class === 'us_stock' ? 'avg_price_usd' : 'avg_price_jpy';
-        
-        db.get(`SELECT * FROM ${table} WHERE asset_id = ?`, [asset.id], (err, details) => {
-          if (!err && details) {
-            const evaluation = Math.floor((details[priceField] || 0) * (details.quantity || 0));
-            asset.stock_details = {
-              ...details,
-              evaluation: evaluation
-            };
-          }
-          enhancedRows.push(asset);
-          completed++;
-          if (completed === rows.length) {
-            res.json(enhancedRows);
-          }
-        });
-      } else if (asset.class === 'precious_metal') {
-        db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
-          if (!err && details) {
-            const evaluation = Math.floor((details.unit_price_jpy || 0) * (details.weight_g || 0));
-            asset.precious_metal_details = {
-              ...details,
-              evaluation: evaluation
-            };
-          }
-          enhancedRows.push(asset);
-          completed++;
-          if (completed === rows.length) {
-            res.json(enhancedRows);
-          }
-        });
-      } else {
-        enhancedRows.push(asset);
-        completed++;
-        if (completed === rows.length) {
-          res.json(enhancedRows);
-        }
+    // Then get paginated data
+    db.all(baseQuery, [...params, limitNum, offset], (err, rows) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
       }
+      
+      // For paginated requests, return simple structure without enhanced details
+      if (req.query.page) {
+        return res.json({
+          assets: rows,
+          pagination: {
+            page: pageNum,
+            limit: limitNum,
+            total: total,
+            totalPages: totalPages
+          }
+        });
+      }
+      
+      // Legacy behavior for non-paginated requests (for compatibility)
+      // Enhance assets with class-specific details for evaluation display
+      const enhancedRows = [];
+      let completed = 0;
+      
+      if (rows.length === 0) {
+        return res.json(rows);
+      }
+      
+      rows.forEach(asset => {
+        if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+          const table = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
+          const priceField = asset.class === 'us_stock' ? 'avg_price_usd' : 'avg_price_jpy';
+          
+          db.get(`SELECT * FROM ${table} WHERE asset_id = ?`, [asset.id], (err, details) => {
+            if (!err && details) {
+              const evaluation = Math.floor((details[priceField] || 0) * (details.quantity || 0));
+              asset.stock_details = {
+                ...details,
+                evaluation: evaluation
+              };
+            }
+            enhancedRows.push(asset);
+            completed++;
+            if (completed === rows.length) {
+              res.json(enhancedRows);
+            }
+          });
+        } else if (asset.class === 'precious_metal') {
+          db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
+            if (!err && details) {
+              const evaluation = Math.floor((details.unit_price_jpy || 0) * (details.weight_g || 0));
+              asset.precious_metal_details = {
+                ...details,
+                evaluation: evaluation
+              };
+            }
+            enhancedRows.push(asset);
+            completed++;
+            if (completed === rows.length) {
+              res.json(enhancedRows);
+            }
+          });
+        } else {
+          enhancedRows.push(asset);
+          completed++;
+          if (completed === rows.length) {
+            res.json(enhancedRows);
+          }
+        }
+      });
     });
   });
 });

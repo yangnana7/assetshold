@@ -307,6 +307,189 @@ app.get('/api/dashboard', (req, res) => {
   });
 });
 
+// User management routes (admin only)
+app.get('/api/users', requireAdmin, (req, res) => {
+  db.all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC', (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+app.post('/api/users', requireAdmin, (req, res) => {
+  const { username, password, role } = req.body;
+  
+  if (!username || !password || !role) {
+    return res.status(400).json({ error: 'Username, password, and role are required' });
+  }
+  
+  if (!['admin', 'viewer'].includes(role)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
+  
+  // Check if username already exists
+  db.get('SELECT id FROM users WHERE username = ?', [username], (err, existingUser) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    
+    if (existingUser) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+    
+    // Hash password and create user
+    bcrypt.hash(password, 10, (err, hash) => {
+      if (err) {
+        return res.status(500).json({ error: 'Password hashing failed' });
+      }
+      
+      db.run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
+        [username, hash, role],
+        function(err) {
+          if (err) {
+            return res.status(500).json({ error: err.message });
+          }
+          
+          const newUser = {
+            id: this.lastID,
+            username,
+            role,
+            created_at: new Date().toISOString()
+          };
+          
+          logAudit('users', this.lastID, 'CREATE', null, newUser, req.session.user.id);
+          res.status(201).json(newUser);
+        }
+      );
+    });
+  });
+});
+
+app.patch('/api/users/:id', requireAdmin, (req, res) => {
+  const userId = req.params.id;
+  const { username, role } = req.body;
+  
+  // Prevent admin from editing their own role
+  if (parseInt(userId) === req.session.user.id && role !== undefined) {
+    return res.status(400).json({ error: 'Cannot change your own role' });
+  }
+  
+  // Get current user data for audit
+  db.get('SELECT * FROM users WHERE id = ?', [userId], (err, currentUser) => {
+    if (err || !currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const updates = {};
+    if (username && username !== currentUser.username) {
+      // Check if new username is unique
+      db.get('SELECT id FROM users WHERE username = ? AND id != ?', [username, userId], (err, existing) => {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        if (existing) {
+          return res.status(409).json({ error: 'Username already exists' });
+        }
+        
+        updates.username = username;
+        performUserUpdate();
+      });
+    } else {
+      performUserUpdate();
+    }
+    
+    function performUserUpdate() {
+      if (role && role !== currentUser.role) {
+        if (!['admin', 'viewer'].includes(role)) {
+          return res.status(400).json({ error: 'Invalid role' });
+        }
+        updates.role = role;
+      }
+      
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+      
+      const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+      const values = Object.values(updates);
+      values.push(userId);
+      
+      db.run(`UPDATE users SET ${setClause} WHERE id = ?`, values, function(err) {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        const updatedUser = { ...currentUser, ...updates, id: parseInt(userId) };
+        delete updatedUser.password_hash;
+        
+        logAudit('users', userId, 'UPDATE', currentUser, updatedUser, req.session.user.id);
+        res.json(updatedUser);
+      });
+    }
+  });
+});
+
+app.patch('/api/users/:id/password', requireAdmin, (req, res) => {
+  const userId = req.params.id;
+  const { password } = req.body;
+  
+  if (!password) {
+    return res.status(400).json({ error: 'Password is required' });
+  }
+  
+  if (password.length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  }
+  
+  // Get current user for audit
+  db.get('SELECT username FROM users WHERE id = ?', [userId], (err, user) => {
+    if (err || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    bcrypt.hash(password, 10, (err, hash) => {
+      if (err) {
+        return res.status(500).json({ error: 'Password hashing failed' });
+      }
+      
+      db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, userId], function(err) {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        logAudit('users', userId, 'PASSWORD_CHANGE', null, { username: user.username }, req.session.user.id);
+        res.json({ success: true, message: 'Password updated successfully' });
+      });
+    });
+  });
+});
+
+app.delete('/api/users/:id', requireAdmin, (req, res) => {
+  const userId = req.params.id;
+  
+  // Prevent deletion of current user
+  if (parseInt(userId) === req.session.user.id) {
+    return res.status(400).json({ error: 'Cannot delete your own account' });
+  }
+  
+  // Get current user data for audit
+  db.get('SELECT * FROM users WHERE id = ?', [userId], (err, currentUser) => {
+    if (err || !currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    db.run('DELETE FROM users WHERE id = ?', [userId], function(err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      logAudit('users', userId, 'DELETE', currentUser, null, req.session.user.id);
+      res.json({ success: true });
+    });
+  });
+});
+
 // Assets CRUD routes
 app.get('/api/assets', (req, res) => {
   const { class: assetClass } = req.query;

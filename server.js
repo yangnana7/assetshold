@@ -77,11 +77,12 @@ app.use(session({
 }));
 
 // Market data providers (BDD requirement 4.3)
-const { makeStockProvider, makeFxProvider } = require('./providers/registry');
+const { makeStockProvider, makeFxProvider, makePreciousMetalProvider } = require('./providers/registry');
 
 // Initialize providers
 const stockProvider = makeStockProvider(MARKET_ENABLE);
 const fxProvider = makeFxProvider(MARKET_ENABLE);
+const preciousMetalProvider = makePreciousMetalProvider(MARKET_ENABLE);
 
 // Cache strategy implementation (BDD requirement 4.4)
 const CACHE_TTL = {
@@ -245,13 +246,21 @@ async function calculateMarketValue(asset) {
     }
     
     if (assetClass === 'precious_metal' && asset.precious_metal_details) {
-      // For precious metals, we might use spot prices
-      // For now, return the current static calculation
+      const { metal, weight_g } = asset.precious_metal_details;
+      const key = `precious_metal:${metal}`;
+      
+      const priceData = await fetchWithCache(key, CACHE_TTL.stock,
+        () => preciousMetalProvider.getQuote(metal, 'JP')
+      );
+      
+      // Calculate total value: price per gram * weight in grams
+      const valueJpy = roundDown2(priceData.price * weight_g);
+      
       return {
-        value_jpy: asset.book_value_jpy,
-        as_of: new Date().toISOString(),
+        value_jpy: Math.floor(valueJpy),
+        as_of: priceData.asOf,
         fx_context: null,
-        stale: false
+        stale: priceData.stale
       };
     }
     
@@ -1429,13 +1438,119 @@ async function processMarketValuation(asset, req, res) {
   }
 }
 
+// POST /api/valuations/refresh-all - Bulk market data refresh for all supported assets
+app.post('/api/valuations/refresh-all', async (req, res) => {
+  if (!MARKET_ENABLE) {
+    return res.status(403).json({ code: 'market_disabled', message: 'Market data is disabled' });
+  }
+
+  try {
+    // Get all assets that support market valuation
+    const supportedAssetClasses = ['us_stock', 'jp_stock', 'precious_metal'];
+    const query = `SELECT * FROM assets WHERE class IN (${supportedAssetClasses.map(() => '?').join(',')})`;
+    
+    db.all(query, supportedAssetClasses, async (err, assets) => {
+      if (err) {
+        return res.status(500).json({ error: 'Failed to fetch assets' });
+      }
+
+      let updatedCount = 0;
+      let errorCount = 0;
+      const results = [];
+
+      // Process assets sequentially to avoid overwhelming the providers
+      for (const asset of assets) {
+        try {
+          // Get asset-specific details
+          let detailsQuery = '';
+          let detailsTable = '';
+
+          if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+            detailsTable = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
+            detailsQuery = `SELECT * FROM ${detailsTable} WHERE asset_id = ?`;
+          } else if (asset.class === 'precious_metal') {
+            detailsTable = 'precious_metals';
+            detailsQuery = `SELECT * FROM ${detailsTable} WHERE asset_id = ?`;
+          }
+
+          if (detailsQuery) {
+            const details = await new Promise((resolve, reject) => {
+              db.get(detailsQuery, [asset.id], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+              });
+            });
+
+            if (details) {
+              if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+                asset.stock_details = details;
+              } else if (asset.class === 'precious_metal') {
+                asset.precious_metal_details = details;
+              }
+
+              // Calculate market valuation
+              const valuation = await calculateMarketValue(asset);
+
+              // Save to valuations table
+              await new Promise((resolve, reject) => {
+                db.run(
+                  'INSERT INTO valuations (asset_id, as_of, value_jpy, fx_context) VALUES (?, ?, ?, ?)',
+                  [asset.id, valuation.as_of, valuation.value_jpy, valuation.fx_context],
+                  function(err) {
+                    if (err) reject(err);
+                    else resolve();
+                  }
+                );
+              });
+
+              // Log audit
+              logAudit('assets', asset.id, 'valuation_refresh_bulk', null, valuation, 
+                req.session.user ? req.session.user.id : 'guest');
+
+              results.push({
+                asset_id: asset.id,
+                name: asset.name,
+                class: asset.class,
+                value_jpy: valuation.value_jpy,
+                stale: valuation.stale
+              });
+
+              updatedCount++;
+            }
+          }
+        } catch (error) {
+          console.error(`Failed to update valuation for asset ${asset.id}:`, error);
+          errorCount++;
+        }
+      }
+
+      res.json({
+        message: 'Bulk market data refresh completed',
+        updated: updatedCount,
+        errors: errorCount,
+        total: assets.length,
+        results: results
+      });
+    });
+  } catch (error) {
+    console.error('Bulk valuation refresh error:', error);
+    if (error.code === 'market_disabled') {
+      return res.status(403).json(error);
+    } else if (error.code === 'upstream_unavailable') {
+      return res.status(502).json(error);
+    }
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/market/status
 app.get('/api/market/status', (req, res) => {
   res.json({
     enabled: MARKET_ENABLE,
     provider: {
       stock: stockProvider.name,
-      fx: fxProvider.name
+      fx: fxProvider.name,
+      precious_metal: preciousMetalProvider.name
     },
     now: new Date().toISOString()
   });

@@ -1,115 +1,147 @@
-# ローカル資産ポートフォリオアプリ — BDD設計 最終統合版（改訂）
+# 4. 価格・為替（オフライン優先）— 実装仕様 & BDD（ClaudeCode提出用）
 
-> 目的: 家計簿アプリの運用実績を活かし、株（1株単価×株数）、貴金属（単価×重量）、時計、不動産、コレクション、現預金・外貨などをローカルで安全に管理・評価・可視化する。
-
----
-
-## 0. 開発体制・基本情報
-
-- **ソースコード担当:** ClaudeCode
-- **受け入れ:** あなた
-- **環境:** Windows 11 / Ubuntu Server 24.04 LTS
-- **スタック:** Node.js + Express, SQLite, React + Vite + TanStack Table/Recharts, Vitest/Supertest/Playwright
-- **ポート規約:** 家計簿=3008 / 資産=3009（固定以外はMUST FAIL）
-- **URL:** `http://kakeibo.local` → :3008, `http://assets.local` → :3009
+> この章は「ローカル資産ポートフォリオアプリ — 最終BDD仕様 v2」の **第4章の完全置換版**です。コード実装指示とBDDを含み、即開発可能な粒度に落としています。
 
 ---
 
-## 1. 非機能要件
+## 4.1 基本方針（実装規約）
 
-1. 完全ローカル（外部通信は明示的許可時のみ）
-2. 固定ポート
-3. SQLite + WAL→checkpoint堅牢化
-4. 監査ログ
-5. 停止時自動バックアップ
-6. UI日本語、JPY既定、評価通貨切替（JPY/USD/CNY）
-7. 権限: viewer/admin
+* **既定は手動評価（offline）**。外部ネットワーク呼び出しは無効。
+* **オンデマンド更新は明示的有効化時のみ**（ENV or 設定UI）。
 
----
+  * ENV: `MARKET_ENABLE=1` で市場価格・為替の取得を許可。未設定/0 の場合、すべての外部取得を拒否し、HTTP 403 を返す。
+  * プロセス起動時に設定をログへ明示: `market:disabled` / `market:enabled`。
+* **プロバイダはプラガブル**。標準実装の優先度: `yahoo`（APIキー不要）→ `stooq`（フォールバック）→ `noop`（ダミー）。
+* **キャッシュ前提**。成功時はキャッシュに保存、失敗時は直近キャッシュで継続。
+* **UI 表示規約**: 取得状態バッジと\*\*最終更新時刻（JST）\*\*を明示（例: `最終更新: 2025-08-11 14:05 JST`）。
+* **丸め/表示（既存仕様に整合）**:
 
-## 2. ドメインモデル
+  * 単価・価格表示は小数 **2桁**（円未満は切り捨て）。
+  * 貴金属の重量は小数 **1桁**固定。
+  * 内部計算は double（JS number）で保持、DB格納時は `value_jpy` を **2桁切り捨て→整数化** の順で評価ログへ保存。
 
-- **assets:** id, class, name, note(空文字保存), acquired\_at, book\_value\_jpy, valuation\_source, liquidity\_tier, tags
-- **valuations:** id, asset\_id, as\_of, value\_jpy, fx\_context, extra(JSON: 単価情報等)
-- **us\_stocks:** ticker, exchange, quantity, avg\_price\_usd（表示は *avg\_price\_usd × quantity*）
-- **jp\_stocks:** code, quantity, avg\_price\_jpy（表示は *avg\_price\_jpy × quantity*）
-- **precious\_metals:** metal, weight\_g(小数1桁固定), purity, unit\_price\_jpy(小数2桁固定, 円未満は小数2桁まで切り捨て)（表示は *unit\_price\_jpy × weight\_g*）
-- その他: watches, real\_estates, collections, cashes
+## 4.2 データモデル拡張
 
----
-
-## 3. データ連携（CSV正本）
-
-- 初回: 手動or外部スクリプトで `data/portfolio.csv` 作成
-- 変更時: ファイルウォッチ→差分Upsert
-- 書き出し: CSV/MD/JSON（MDはレポート専用）
-- CSV仕様: UTF-8, LF, ヘッダあり、class+natural\_keyで同定
-
----
-
-## 4. 価格・為替
-
-- 既定: 手動評価
-- オンデマンド更新（明示的有効化時のみ）: 株価, 為替
-- 失敗時: キャッシュ利用＋最終更新時刻表示
-
----
-
-## 5. 画面仕様
-
-### 未ログイン
-
-- NAV, 配分円グラフ, 月次推移, Top3表示（空括弧禁止）, 検索/並び替え/CSV出力
-
-### ログイン後
-
-- 資産一覧（数量×単価の評価表示対応）
-- 新規登録（株は単価と数量、貴金属は重量と単価で入力、小数点ルール適用）
-- インポート/エクスポート（CSV）
-- 評価更新
-- リバランス試算
-- 不動産ユーティリティ
-
----
-
-## 6. API
-
-- GET /api/assets?class=...
-- POST /api/assets
-- PATCH /api/assets/\:id（noteのみ）
-- DELETE /api/assets/\:id
-- POST /api/import/csv
-- GET /api/export?format=csv|md|json
-- POST /api/valuations/\:id/refresh
-- 認可: 未ログインはdashboardのみ、編集系は401
-
----
-
-## 7. BDDシナリオ（追加要素）
-
-- **株の評価表示:** us\_stock/jp\_stock クラスでは、一覧と詳細に *取得単価×数量* と *現在値×数量* を自動表示（価格は小数2桁、円未満切り捨て）
-- **貴金属の評価表示:** precious\_metals クラスでは、一覧と詳細に *単価(小数2桁)×重量(小数1桁)* を自動表示（円未満切り捨て）
-- 既存の未ログイン/APIブロック/note更新/Top3表示/CSV同期/ポート固定/adminリダイレクト/配分分析/月次推移は従来通り
-
----
-
-## 8. スキーマ（抜粋）
+* 既存 `valuations(id, asset_id, as_of, value_jpy, fx_context)` を使用。
+* 追加テーブル:
 
 ```sql
-CREATE TABLE precious_metals (
-  asset_id INTEGER PRIMARY KEY,
-  metal TEXT NOT NULL,
-  weight_g REAL NOT NULL,
-  purity REAL,
-  unit_price_jpy REAL,
-  FOREIGN KEY(asset_id) REFERENCES assets(id)
+CREATE TABLE IF NOT EXISTS price_cache (
+  key TEXT PRIMARY KEY,      -- e.g. "stock:US:GOOG" / "fx:USDJPY"
+  payload TEXT NOT NULL,     -- JSON { price, currency, as_of }
+  fetched_at TEXT NOT NULL   -- ISO8601
 );
 ```
 
----
+* `fx_context` 例: `"USDJPY@146.71(2025-08-11T05:00:00Z)"`。
 
-## 9. 受け入れ基準
+## 4.3 プロバイダ IF（TypeScript）
 
-- 株・貴金属が単価×数量/重量で可視化される（小数点表示ルール・円未満切り捨てを厳守）
-- 他基準は従来通り（固定ポート、CSV⇄DBラウンドトリップ、note運用、Top3空括弧禁止など）
+```ts
+export type PricePoint = { price: number; currency: string; asOf: string }; // ISO8601
+export interface StockProvider {
+  name: string;
+  getQuote(ticker: string, exchange?: string): Promise<PricePoint>;
+}
+export interface FxProvider {
+  name: string;
+  getRate(pair: "USDJPY" | "CNYJPY"): Promise<PricePoint>; // price = rate
+}
+```
 
+* 実装クラス: `YahooProvider`, `StooqProvider`, `NoopProvider`。
+* ファクトリ: `providers/registry.ts`
+
+```ts
+export function makeStockProvider(): StockProvider { /* envと到達性で選択 */ }
+export function makeFxProvider(): FxProvider { /* 同上 */ }
+```
+
+## 4.4 キャッシュ戦略
+
+* **キー設計**: `stock:<MIC or ccTLD>:<TICKER>`（例: `stock:US:GOOG`, `stock:JP:7974`）、`fx:<PAIR>`。
+* **TTL**: 株価 = **15分**、為替 = **5分**。
+* **更新ポリシ**:
+
+  1. キャッシュ命中 & 未失効 → そのまま返す。
+  2. 失効 → プロバイダへフェッチ。成功→キャッシュ更新。失敗→最後のキャッシュで返す + `stale=true` をUIに伝搬。
+* **同時実行**: 同一キーの重複取得は in-memory ロックで抑止（リクエスト集約）。
+
+## 4.5 API（新規/更新）
+
+* `POST /api/valuations/:assetId/refresh`
+
+  * **ガード**: `MARKET_ENABLE!=1` なら `403 { code:"market_disabled" }`。
+  * **挙動**: 資産クラスに応じて株価/為替を解決し、`valuations` に1レコード追加。応答は `{ value_jpy, as_of, fx_context, stale }`。
+* `POST /api/valuations/batch-refresh`
+
+  * ボディ: `{ class?: 'us_stock'|'jp_stock'|'precious_metal'|'watch', assetIds?: number[] }`
+  * セマンティクス: 指定集合を順次更新（内部キュー化、同時5並列）。
+* `GET /api/market/status`
+
+  * 応答: `{ enabled: boolean, provider: { stock: string, fx: string }, now: iso }`。
+
+## 4.6 評価計算ルール
+
+* **US株**: `value_jpy = roundDown2( price_usd * quantity * USDJPY )`。
+* **日本株**: `value_jpy = roundDown2( price_jpy * quantity )`。
+* **貴金属**（時価→単価の補助表示はUIで計算）: `unit_price_jpy = roundDown2( spot_jpy / weight_g )`、重量は1桁固定。
+* **時計/コレクション/不動産**: 既定は手動（`manual`）。
+* `roundDown2(x) = floor(x*100)/100`。必要に応じ整数円へ（小数保持時は拡張カラムを検討）。
+
+## 4.7 失敗時の動作
+
+* プロバイダ例外/ネットワーク不可:
+
+  * 既定: 直近キャッシュで計算、UIに `stale` バッジ + 最終更新時刻。
+  * キャッシュ無し: `502 { code:"upstream_unavailable" }` を返し、UIはトーストで通知。
+* レート欠落（例: USDJPY 取得不可）: 依存資産の更新を**スキップ**して一括結果に `skipped` として返却。
+
+## 4.8 UI 要件
+
+* 各カードに `価格: ¥X（stale） / 最終更新: YYYY-MM-DD HH:mm JST`。
+* ダッシュボード上部に `市場データ: 有効/無効` のトグル表示（無効時は説明ツールチップ）。
+* 一括更新モーダル: 進捗（成功/失敗/スキップ件数）と所要時間、最後に `処理ログを表示` リンク。
+
+## 4.9 ログ/監査
+
+* `audit_log` に `valuation_refresh` を記録（`who, when, asset_id, from, to, provider, stale`）。
+* `price_cache` は日次で TTL 超過行を掃除（起動時 + 毎時）。
+
+## 4.10 BDD シナリオ
+
+**シナリオ: オフライン既定でのブロック**
+
+* **Given** `MARKET_ENABLE` 未設定
+* **When** `POST /api/valuations/123/refresh`
+* **Then** `403` を返し、本文に `market_disabled` を含む。
+
+**シナリオ: 株価のキャッシュ利用（有効・期限内）**
+
+* **Given** `MARKET_ENABLE=1` かつ `price_cache("stock:US:GOOG")` が5分以内
+* **When** `POST /api/valuations/:id/refresh`
+* **Then** 外部アクセスは発生せず、キャッシュで `value_jpy` を算出し `valuations` に保存。UIに `stale=false`。
+
+**シナリオ: 外部失敗時のフォールバック**
+
+* **Given** `MARKET_ENABLE=1` かつ キャッシュは存在するが失効
+* **When** 外部取得がタイムアウト
+* **Then** 直近キャッシュで計算し `stale=true` を応答に含める。UIに `stale` バッジを表示。
+
+**シナリオ: キャッシュ未保持時の失敗**
+
+* **Given** キャッシュ無し
+* **When** 外部失敗
+* **Then** `502 upstream_unavailable` を返して DB 変更無し。UI はトーストで通知。
+
+**シナリオ: FX 取得がない場合のスキップ**
+
+* **Given** USDJPY 取得不可
+* **When** US株の一括更新
+* **Then** 対象資産の `refresh` は `skipped` として戻り、処理サマリに `skipped` 件数を含む。
+
+**シナリオ: UIの最終更新表示**
+
+* **Given** 直近成功キャッシュ `as_of=2025-08-11T05:00:00Z`
+* **When** ダッシュボード表示
+* **Then** カードに `最終更新: 2025-08-11 14:00 JST` が表示される（JST換算）。

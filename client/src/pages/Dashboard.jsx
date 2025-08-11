@@ -17,9 +17,14 @@ function Dashboard() {
   const [totalAssetCount, setTotalAssetCount] = useState(0)
   const ASSETS_PER_PAGE = 30
 
+  // Market data states
+  const [marketStatus, setMarketStatus] = useState(null)
+  const [marketLoading, setMarketLoading] = useState(false)
+
   useEffect(() => {
     fetchDashboardData()
     fetchAssets(1)
+    fetchMarketStatus()
   }, [])
 
   useEffect(() => {
@@ -61,6 +66,37 @@ function Dashboard() {
       console.error('Assets fetch error:', error)
     } finally {
       setAssetsLoading(false)
+    }
+  }
+
+  const fetchMarketStatus = async () => {
+    try {
+      setMarketLoading(true)
+      const response = await axios.get('/api/market/status')
+      setMarketStatus(response.data)
+    } catch (error) {
+      console.error('Market status fetch error:', error)
+    } finally {
+      setMarketLoading(false)
+    }
+  }
+
+  const refreshAssetValuation = async (assetId) => {
+    try {
+      const response = await axios.post(`/api/valuations/${assetId}/refresh`)
+      console.log('Valuation refreshed:', response.data)
+      // Optionally refresh the assets list
+      fetchAssets(currentPage)
+    } catch (error) {
+      console.error('Valuation refresh error:', error)
+      // Handle different error codes
+      if (error.response?.data?.code === 'market_disabled') {
+        alert('市場データが無効になっています')
+      } else if (error.response?.data?.code === 'upstream_unavailable') {
+        alert('市場データの取得に失敗しました')
+      } else {
+        alert('評価額の更新に失敗しました')
+      }
     }
   }
 
@@ -249,6 +285,20 @@ function Dashboard() {
 
   return (
     <div className="container">
+      {/* Market Data Status */}
+      {marketStatus && (
+        <div className="market-status-bar">
+          <div className={`market-status-indicator ${marketStatus.enabled ? 'enabled' : 'disabled'}`}>
+            市場データ: {marketStatus.enabled ? '有効' : '無効'}
+          </div>
+          {marketStatus.enabled && (
+            <div className="market-providers">
+              Stock: {marketStatus.provider.stock} | FX: {marketStatus.provider.fx}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="dashboard-grid">
         <div className="card">
           <h3>資産サマリー</h3>
@@ -417,6 +467,15 @@ function Dashboard() {
                       <div>{formatCurrency(asset.gain_loss_jpy || 0)}</div>
                       <div className="percentage">({asset.gain_loss_percentage || '0.00'}%)</div>
                     </div>
+                    {marketStatus?.enabled && (asset.class === 'us_stock' || asset.class === 'jp_stock') && (
+                      <button 
+                        className="refresh-valuation-btn"
+                        onClick={() => refreshAssetValuation(asset.id)}
+                        title="市場価格を更新"
+                      >
+                        🔄
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

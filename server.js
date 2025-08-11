@@ -1042,9 +1042,10 @@ initDatabase();
 setupCsvWatcher();
 setupWalCheckpoints();
 
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`Portfolio management server running on port ${port}`);
   console.log(`Dashboard URL: http://localhost:${port}`);
+  console.log(`Network access: http://<server-ip>:${port}`);
 });
 
 // Graceful shutdown with backup

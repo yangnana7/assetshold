@@ -326,13 +326,29 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-#### 7. ファイアウォール設定
+#### 7. ネットワークアクセス設定
 
+**直接アクセス（開発・テスト用）**:
 ```bash
-# ポート3009を直接外部公開しない（nginxのみ）
+# ポート3009を開放して直接アクセスを許可
+sudo ufw allow 22
+sudo ufw allow 3009
+sudo ufw --force enable
+
+# アクセスURL
+# 同一ネットワーク内から: http://サーバーのIP:3009
+# ローカルから: http://localhost:3009
+```
+
+**nginx経由のアクセス（本番推奨）**:
+```bash
+# nginxのみ外部公開（ポート3009は内部のみ）
 sudo ufw allow 22
 sudo ufw allow 80
 sudo ufw --force enable
+
+# アクセスURL（nginx設定後）
+# http://assets.local または http://サーバーのIP
 ```
 
 #### 8. 運用管理

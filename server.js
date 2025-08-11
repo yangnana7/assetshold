@@ -307,73 +307,321 @@ app.get('/api/dashboard', (req, res) => {
   });
 });
 
-// Assets CRUD routes
-app.get('/api/assets', (req, res) => {
-  const { class: assetClass } = req.query;
-  let query = 'SELECT * FROM assets';
-  let params = [];
+// User management routes (admin only)
+app.get('/api/users', requireAdmin, (req, res) => {
+  db.all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC', (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+app.post('/api/users', requireAdmin, (req, res) => {
+  const { username, password, role } = req.body;
   
-  if (assetClass) {
-    query += ' WHERE class = ?';
-    params.push(assetClass);
+  if (!username || !password || !role) {
+    return res.status(400).json({ error: 'Username, password, and role are required' });
   }
   
-  query += ' ORDER BY created_at DESC';
+  if (!['admin', 'viewer'].includes(role)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
   
-  db.all(query, params, (err, rows) => {
+  // Check if username already exists
+  db.get('SELECT id FROM users WHERE username = ?', [username], (err, existingUser) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
     
-    // Enhance assets with class-specific details for evaluation display
-    const enhancedRows = [];
-    let completed = 0;
-    
-    if (rows.length === 0) {
-      return res.json(rows);
+    if (existingUser) {
+      return res.status(409).json({ error: 'Username already exists' });
     }
     
-    rows.forEach(asset => {
-      if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
-        const table = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
-        const priceField = asset.class === 'us_stock' ? 'avg_price_usd' : 'avg_price_jpy';
-        
-        db.get(`SELECT * FROM ${table} WHERE asset_id = ?`, [asset.id], (err, details) => {
-          if (!err && details) {
-            const evaluation = Math.floor((details[priceField] || 0) * (details.quantity || 0));
-            asset.stock_details = {
-              ...details,
-              evaluation: evaluation
-            };
-          }
-          enhancedRows.push(asset);
-          completed++;
-          if (completed === rows.length) {
-            res.json(enhancedRows);
-          }
-        });
-      } else if (asset.class === 'precious_metal') {
-        db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
-          if (!err && details) {
-            const evaluation = Math.floor((details.unit_price_jpy || 0) * (details.weight_g || 0));
-            asset.precious_metal_details = {
-              ...details,
-              evaluation: evaluation
-            };
-          }
-          enhancedRows.push(asset);
-          completed++;
-          if (completed === rows.length) {
-            res.json(enhancedRows);
-          }
-        });
-      } else {
-        enhancedRows.push(asset);
-        completed++;
-        if (completed === rows.length) {
-          res.json(enhancedRows);
-        }
+    // Hash password and create user
+    bcrypt.hash(password, 10, (err, hash) => {
+      if (err) {
+        return res.status(500).json({ error: 'Password hashing failed' });
       }
+      
+      db.run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
+        [username, hash, role],
+        function(err) {
+          if (err) {
+            return res.status(500).json({ error: err.message });
+          }
+          
+          const newUser = {
+            id: this.lastID,
+            username,
+            role,
+            created_at: new Date().toISOString()
+          };
+          
+          logAudit('users', this.lastID, 'CREATE', null, newUser, req.session.user.id);
+          res.status(201).json(newUser);
+        }
+      );
+    });
+  });
+});
+
+app.patch('/api/users/:id', requireAdmin, (req, res) => {
+  const userId = req.params.id;
+  const { username, role } = req.body;
+  
+  // Prevent admin from editing their own role
+  if (parseInt(userId) === req.session.user.id && role !== undefined) {
+    return res.status(400).json({ error: 'Cannot change your own role' });
+  }
+  
+  // Get current user data for audit
+  db.get('SELECT * FROM users WHERE id = ?', [userId], (err, currentUser) => {
+    if (err || !currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const updates = {};
+    if (username && username !== currentUser.username) {
+      // Check if new username is unique
+      db.get('SELECT id FROM users WHERE username = ? AND id != ?', [username, userId], (err, existing) => {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        if (existing) {
+          return res.status(409).json({ error: 'Username already exists' });
+        }
+        
+        updates.username = username;
+        performUserUpdate();
+      });
+    } else {
+      performUserUpdate();
+    }
+    
+    function performUserUpdate() {
+      if (role && role !== currentUser.role) {
+        if (!['admin', 'viewer'].includes(role)) {
+          return res.status(400).json({ error: 'Invalid role' });
+        }
+        updates.role = role;
+      }
+      
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+      
+      const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+      const values = Object.values(updates);
+      values.push(userId);
+      
+      db.run(`UPDATE users SET ${setClause} WHERE id = ?`, values, function(err) {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        const updatedUser = { ...currentUser, ...updates, id: parseInt(userId) };
+        delete updatedUser.password_hash;
+        
+        logAudit('users', userId, 'UPDATE', currentUser, updatedUser, req.session.user.id);
+        res.json(updatedUser);
+      });
+    }
+  });
+});
+
+app.patch('/api/users/:id/password', requireAdmin, (req, res) => {
+  const userId = req.params.id;
+  const { password } = req.body;
+  
+  if (!password) {
+    return res.status(400).json({ error: 'Password is required' });
+  }
+  
+  if (password.length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  }
+  
+  // Get current user for audit
+  db.get('SELECT username FROM users WHERE id = ?', [userId], (err, user) => {
+    if (err || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    bcrypt.hash(password, 10, (err, hash) => {
+      if (err) {
+        return res.status(500).json({ error: 'Password hashing failed' });
+      }
+      
+      db.run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, userId], function(err) {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        logAudit('users', userId, 'PASSWORD_CHANGE', null, { username: user.username }, req.session.user.id);
+        res.json({ success: true, message: 'Password updated successfully' });
+      });
+    });
+  });
+});
+
+app.delete('/api/users/:id', requireAdmin, (req, res) => {
+  const userId = req.params.id;
+  
+  // Prevent deletion of current user
+  if (parseInt(userId) === req.session.user.id) {
+    return res.status(400).json({ error: 'Cannot delete your own account' });
+  }
+  
+  // Get current user data for audit
+  db.get('SELECT * FROM users WHERE id = ?', [userId], (err, currentUser) => {
+    if (err || !currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    db.run('DELETE FROM users WHERE id = ?', [userId], function(err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      logAudit('users', userId, 'DELETE', currentUser, null, req.session.user.id);
+      res.json({ success: true });
+    });
+  });
+});
+
+// Assets CRUD routes
+app.get('/api/assets', (req, res) => {
+  const { class: assetClass, page = '1', limit = '30' } = req.query;
+  const pageNum = parseInt(page);
+  const limitNum = parseInt(limit);
+  const offset = (pageNum - 1) * limitNum;
+  
+  let baseQuery = 'SELECT * FROM assets';
+  let countQuery = 'SELECT COUNT(*) as total FROM assets';
+  let params = [];
+  
+  if (assetClass) {
+    baseQuery += ' WHERE class = ?';
+    countQuery += ' WHERE class = ?';
+    params.push(assetClass);
+  }
+  
+  baseQuery += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  
+  // First get total count
+  db.get(countQuery, params, (err, countResult) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    
+    const total = countResult.total;
+    const totalPages = Math.ceil(total / limitNum);
+    
+    // Then get paginated data
+    db.all(baseQuery, [...params, limitNum, offset], (err, rows) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      // Enhanced data processing for both paginated and non-paginated requests
+      const enhancedRows = [];
+      let completed = 0;
+      
+      if (rows.length === 0) {
+        if (req.query.page) {
+          return res.json({
+            assets: [],
+            pagination: {
+              page: pageNum,
+              limit: limitNum,
+              total: total,
+              totalPages: totalPages
+            }
+          });
+        }
+        return res.json([]);
+      }
+      
+      // Process assets with enhanced details
+      rows.forEach(asset => {
+        if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+          const table = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
+          const priceField = asset.class === 'us_stock' ? 'avg_price_usd' : 'avg_price_jpy';
+          
+          db.get(`SELECT * FROM ${table} WHERE asset_id = ?`, [asset.id], (err, details) => {
+            if (!err && details) {
+              const evaluation = Math.floor((details[priceField] || 0) * (details.quantity || 0));
+              asset.stock_details = {
+                ...details,
+                evaluation: evaluation
+              };
+            }
+            enhancedRows.push(asset);
+            completed++;
+            if (completed === rows.length) {
+              if (req.query.page) {
+                res.json({
+                  assets: enhancedRows,
+                  pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: total,
+                    totalPages: totalPages
+                  }
+                });
+              } else {
+                res.json(enhancedRows);
+              }
+            }
+          });
+        } else if (asset.class === 'precious_metal') {
+          db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
+            if (!err && details) {
+              const evaluation = Math.floor((details.unit_price_jpy || 0) * (details.weight_g || 0));
+              asset.precious_metal_details = {
+                ...details,
+                evaluation: evaluation
+              };
+            }
+            enhancedRows.push(asset);
+            completed++;
+            if (completed === rows.length) {
+              if (req.query.page) {
+                res.json({
+                  assets: enhancedRows,
+                  pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: total,
+                    totalPages: totalPages
+                  }
+                });
+              } else {
+                res.json(enhancedRows);
+              }
+            }
+          });
+        } else {
+          enhancedRows.push(asset);
+          completed++;
+          if (completed === rows.length) {
+            if (req.query.page) {
+              res.json({
+                assets: enhancedRows,
+                pagination: {
+                  page: pageNum,
+                  limit: limitNum,
+                  total: total,
+                  totalPages: totalPages
+                }
+              });
+            } else {
+              res.json(enhancedRows);
+            }
+          }
+        }
+      });
     });
   });
 });

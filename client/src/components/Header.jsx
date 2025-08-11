@@ -25,6 +25,12 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
             >
               一括インポート
             </button>
+            <button
+              className={currentPage === 'users' ? 'active' : ''}
+              onClick={() => onPageChange('users')}
+            >
+              ユーザー管理
+            </button>
           </nav>
         )}
         

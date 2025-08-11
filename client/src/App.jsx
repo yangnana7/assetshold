@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import AssetList from './pages/AssetList'
 import Import from './pages/Import'
 import Login from './pages/Login'
+import UserManagement from './pages/UserManagement'
 import { useAuth } from './hooks/useAuth'
 
 function App() {
@@ -28,6 +29,8 @@ function App() {
         return user && user.role === 'admin' ? <AssetList /> : <Dashboard />
       case 'import':
         return user && user.role === 'admin' ? <Import /> : <Dashboard />
+      case 'users':
+        return user && user.role === 'admin' ? <UserManagement /> : <Dashboard />
       case 'login':
         return <Login onLogin={login} />
       default:

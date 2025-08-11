@@ -236,7 +236,7 @@ function Dashboard() {
             <span className="detail-value">{quantity?.toLocaleString()}株</span>
           </div>
           <div className="detail-line">
-            <span className="detail-label">平均単価:</span>
+            <span className="detail-label">取得単価:</span>
             <span className="detail-value">${avg_price_usd?.toFixed(2)}</span>
           </div>
         </div>
@@ -256,7 +256,7 @@ function Dashboard() {
             <span className="detail-value">{quantity?.toLocaleString()}株</span>
           </div>
           <div className="detail-line">
-            <span className="detail-label">平均単価:</span>
+            <span className="detail-label">取得単価:</span>
             <span className="detail-value">¥{avg_price_jpy?.toLocaleString()}</span>
           </div>
         </div>
@@ -276,7 +276,7 @@ function Dashboard() {
             <span className="detail-value">{weight_g}g</span>
           </div>
           <div className="detail-line">
-            <span className="detail-label">単価:</span>
+            <span className="detail-label">取得単価:</span>
             <span className="detail-value">¥{unit_price_jpy?.toLocaleString()}/g</span>
           </div>
           {purity && (
@@ -478,6 +478,9 @@ function Dashboard() {
                     </div>
                   </div>
                   <div className="asset-card-right">
+                    <div className="asset-current-value-label">
+                      評価額：
+                    </div>
                     <div className={`asset-current-value ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
                       {formatCurrency(asset.current_value_jpy || asset.book_value_jpy)}
                     </div>
@@ -488,6 +491,11 @@ function Dashboard() {
                       <div>{formatCurrency(asset.gain_loss_jpy || 0)}</div>
                       <div className="percentage">({asset.gain_loss_percentage || '0.00'}%)</div>
                     </div>
+                    {(asset.class === 'us_stock' || asset.class === 'jp_stock' || asset.class === 'precious_metal') && getMarketUnitPrice(asset) && (
+                      <div className="asset-unit-price">
+                        時価：{getMarketUnitPrice(asset)}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -516,6 +524,38 @@ function getAssetClassName(classKey) {
   }
   
   return classNames[classKey] || classKey
+}
+
+function getMarketUnitPrice(asset) {
+  // Calculate market unit price for stocks and precious metals
+  if (asset.class === 'us_stock' && asset.stock_details) {
+    const { quantity } = asset.stock_details
+    if (quantity > 0) {
+      const totalValue = asset.current_value_jpy || asset.book_value_jpy
+      const unitPrice = totalValue / quantity
+      return `¥${unitPrice.toLocaleString()} /株`
+    }
+  }
+  
+  if (asset.class === 'jp_stock' && asset.stock_details) {
+    const { quantity } = asset.stock_details
+    if (quantity > 0) {
+      const totalValue = asset.current_value_jpy || asset.book_value_jpy
+      const unitPrice = totalValue / quantity
+      return `¥${unitPrice.toLocaleString()} /株`
+    }
+  }
+  
+  if (asset.class === 'precious_metal' && asset.precious_metal_details) {
+    const { weight_g } = asset.precious_metal_details
+    if (weight_g > 0) {
+      const totalValue = asset.current_value_jpy || asset.book_value_jpy
+      const unitPrice = totalValue / weight_g
+      return `¥${unitPrice.toLocaleString()} /g`
+    }
+  }
+  
+  return null
 }
 
 function getLiquidityTierName(tier) {

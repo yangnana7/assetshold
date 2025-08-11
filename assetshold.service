@@ -9,6 +9,7 @@ Group=yangnana
 WorkingDirectory=/home/yangnana/assetshold
 Environment=NODE_ENV=production
 Environment=PATH=/usr/bin:/usr/local/bin
+Environment=MARKET_ENABLE=1
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=10

@@ -4,7 +4,8 @@
       "Bash(mkdir:*)",
       "Bash(npm install)",
       "Bash(rm:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(git merge:*)"
     ],
     "deny": []
   }

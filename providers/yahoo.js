@@ -18,11 +18,11 @@ class YahooStockProvider extends StockProvider {
           new Date().toISOString()
         );
       } else {
-        // For US stocks, use mock data for now
-        const mockData = this._getMockStockData(ticker, exchange);
+        // For US stocks, fetch real data from Yahoo Finance US
+        const realData = await this._fetchUSStockPrice(ticker);
         return new PricePoint(
-          mockData.price,
-          mockData.currency,
+          realData.price,
+          'USD',
           new Date().toISOString()
         );
       }
@@ -91,13 +91,67 @@ class YahooStockProvider extends StockProvider {
     });
   }
 
+  async _fetchUSStockPrice(ticker) {
+    const https = require('https');
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+    
+    return new Promise((resolve, reject) => {
+      const request = https.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      }, (response) => {
+        let data = '';
+        
+        response.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        response.on('end', () => {
+          try {
+            const jsonData = JSON.parse(data);
+            const result = jsonData.chart?.result?.[0];
+            
+            if (!result) {
+              throw new Error('No data found');
+            }
+            
+            const meta = result.meta;
+            const currentPrice = meta.regularMarketPrice || meta.previousClose;
+            
+            if (!currentPrice) {
+              throw new Error('Price data not available');
+            }
+            
+            resolve({
+              price: Math.round(currentPrice * 100) / 100, // Round to 2 decimal places for USD
+              currency: 'USD'
+            });
+          } catch (parseError) {
+            reject(new Error(`Failed to parse Yahoo Finance data: ${parseError.message}`));
+          }
+        });
+      });
+      
+      request.on('error', (error) => {
+        reject(new Error(`HTTP request failed: ${error.message}`));
+      });
+      
+      request.setTimeout(10000, () => {
+        request.destroy();
+        reject(new Error('Request timeout'));
+      });
+    });
+  }
+
   _getMockStockData(ticker, exchange) {
-    // Mock stock prices for development/testing - only used for US stocks or as fallback
+    // Mock stock prices for development/testing - only used as fallback when API fails
     const mockPrices = {
-      'AAPL': { price: 185.50, currency: 'USD' },
-      'GOOGL': { price: 142.75, currency: 'USD' },
+      'AAPL': { price: 229.35, currency: 'USD' },
+      'GOOGL': { price: 201.63, currency: 'USD' },
       'MSFT': { price: 415.25, currency: 'USD' },
-      // Japanese stocks removed - now fetched from real API
+      'STNE': { price: 14.34, currency: 'USD' },
+      // Updated with current real prices as of Aug 2025
     };
 
     // Return mock price or fallback

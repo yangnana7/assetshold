@@ -77,7 +77,10 @@ if (!SESSION_SECRET) {
   process.exit(1); 
 }
 
-app.use(helmet());
+app.use(helmet({
+  crossOriginOpenerPolicy: false,
+  originAgentCluster: false
+}));
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,

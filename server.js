@@ -246,18 +246,23 @@ async function calculateMarketValue(asset) {
     }
     
     if (assetClass === 'precious_metal' && asset.precious_metal_details) {
-      const { metal, weight_g } = asset.precious_metal_details;
+      const { metal, weight_g, purity } = asset.precious_metal_details;
       const key = `precious_metal:${metal}`;
       
       const priceData = await fetchWithCache(key, CACHE_TTL.stock,
         () => preciousMetalProvider.getQuote(metal, 'JP')
       );
       
-      // Calculate total value: price per gram * weight in grams
-      const valueJpy = roundDown2(priceData.price * weight_g);
+      // Calculate price per gram adjusted for purity
+      // Pure metal price * purity ratio
+      const purityAdjustedPrice = priceData.price * purity;
+      
+      // Calculate total value: adjusted price per gram * weight in grams
+      const valueJpy = roundDown2(purityAdjustedPrice * weight_g);
       
       return {
         value_jpy: Math.floor(valueJpy),
+        unit_price_jpy: roundDown2(purityAdjustedPrice),
         as_of: priceData.asOf,
         fx_context: null,
         stale: priceData.stale
@@ -806,28 +811,35 @@ app.get('/api/assets', (req, res) => {
               };
             }
             
-            // Add current market value to asset
-            asset.current_value_jpy = calculateCurrentValue(asset);
-            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
-            
-            enhancedRows.push(asset);
-            completed++;
-            if (completed === rows.length) {
-              if (req.query.page) {
-                res.json({
-                  assets: enhancedRows,
-                  pagination: {
-                    page: pageNum,
-                    limit: limitNum,
-                    total: total,
-                    totalPages: totalPages
-                  }
-                });
-              } else {
-                res.json(enhancedRows);
+            // Get latest market valuation for unit price
+            db.get('SELECT unit_price_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+              if (!err && valuation && valuation.unit_price_jpy) {
+                asset.market_unit_price_jpy = valuation.unit_price_jpy;
               }
-            }
+              
+              // Add current market value to asset
+              asset.current_value_jpy = calculateCurrentValue(asset);
+              asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+              asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+              
+              enhancedRows.push(asset);
+              completed++;
+              if (completed === rows.length) {
+                if (req.query.page) {
+                  res.json({
+                    assets: enhancedRows,
+                    pagination: {
+                      page: pageNum,
+                      limit: limitNum,
+                      total: total,
+                      totalPages: totalPages
+                    }
+                  });
+                } else {
+                  res.json(enhancedRows);
+                }
+              }
+            });
           });
         } else {
           // Add current market value to asset
@@ -866,7 +878,37 @@ app.get('/api/assets/:id', (req, res) => {
     if (!row) {
       return res.status(404).json({ error: 'Asset not found' });
     }
-    res.json(row);
+    
+    const asset = row;
+    
+    if (asset.class === 'precious_metal') {
+      db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
+        if (!err && details) {
+          asset.precious_metal_details = details;
+        }
+        
+        // Get latest market valuation for unit price
+        db.get('SELECT unit_price_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+          if (!err && valuation && valuation.unit_price_jpy) {
+            asset.market_unit_price_jpy = valuation.unit_price_jpy;
+          }
+          
+          // Add current market value to asset
+          asset.current_value_jpy = calculateCurrentValue(asset);
+          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          
+          res.json(asset);
+        });
+      });
+    } else {
+      // Add current market value to asset
+      asset.current_value_jpy = calculateCurrentValue(asset);
+      asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+      asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+      
+      res.json(asset);
+    }
   });
 });
 
@@ -1404,12 +1446,15 @@ app.post('/api/valuations/:assetId/refresh', async (req, res) => {
 
 async function processMarketValuation(asset, req, res) {
   try {
+    console.log('Processing market valuation for asset:', asset.id, asset.class, asset.name);
+    console.log('Asset precious_metal_details:', asset.precious_metal_details);
     const valuation = await calculateMarketValue(asset);
+    console.log('Calculated valuation:', valuation);
     
     // Save to valuations table
     db.run(
-      'INSERT INTO valuations (asset_id, as_of, value_jpy, fx_context) VALUES (?, ?, ?, ?)',
-      [asset.id, valuation.as_of, valuation.value_jpy, valuation.fx_context],
+      'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
+      [asset.id, valuation.as_of, valuation.value_jpy, valuation.unit_price_jpy, valuation.fx_context],
       function(err) {
         if (err) {
           console.error('Failed to save valuation:', err);
@@ -1422,6 +1467,7 @@ async function processMarketValuation(asset, req, res) {
 
         res.json({
           value_jpy: valuation.value_jpy,
+          unit_price_jpy: valuation.unit_price_jpy,
           as_of: valuation.as_of,
           fx_context: valuation.fx_context,
           stale: valuation.stale

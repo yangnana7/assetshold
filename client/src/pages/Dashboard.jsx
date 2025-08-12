@@ -547,8 +547,29 @@ function getMarketUnitPrice(asset) {
   }
   
   if (asset.class === 'precious_metal' && asset.precious_metal_details) {
-    const { weight_g } = asset.precious_metal_details
+    const { weight_g, purity, metal } = asset.precious_metal_details
     if (weight_g > 0) {
+      // Use market unit price calculation if available
+      if (asset.market_unit_price_jpy) {
+        return `¥${asset.market_unit_price_jpy.toLocaleString()} /g`
+      }
+      
+      // Calculate correct unit price based on purity and base market price
+      // Base prices from Tanaka Kikinzoku (providers/tanaka.js)
+      const baseMarketPrices = {
+        'gold': 17752,
+        'platinum': 7033,
+        'silver': 202.29,
+        'palladium': 6500
+      }
+      
+      const basePrice = baseMarketPrices[metal?.toLowerCase()] || 0
+      if (basePrice > 0 && purity > 0) {
+        const purityAdjustedPrice = basePrice * purity
+        return `¥${purityAdjustedPrice.toLocaleString()} /g`
+      }
+      
+      // Fallback to legacy calculation if base price not available
       const totalValue = asset.current_value_jpy || asset.book_value_jpy
       const unitPrice = totalValue / weight_g
       return `¥${unitPrice.toLocaleString()} /g`

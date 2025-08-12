@@ -98,7 +98,7 @@ app.use(session({
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: false, // HTTPでの動作を保証
     maxAge: 24 * 60 * 60 * 1000
   }
 }));
@@ -452,6 +452,13 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
+  console.log('Session check:', {
+    hasSession: !!req.session,
+    hasUser: !!req.session?.user,
+    userRole: req.session?.user?.role,
+    sessionId: req.sessionID
+  });
+  
   if (!req.session.user || req.session.user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }

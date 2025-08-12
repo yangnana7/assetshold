@@ -77,20 +77,20 @@ if (!SESSION_SECRET) {
   process.exit(1); 
 }
 
-app.use(helmet({
-  crossOriginOpenerPolicy: false,
-  originAgentCluster: false,
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:"],
-      fontSrc: ["'self'"],
-      // upgrade-insecure-requests を除外（HTTPでの動作を保証）
-    }
-  }
-}));
+// Helmet disabled to prevent HTTPS redirect issues on Ubuntu deployment
+// app.use(helmet({
+//   crossOriginOpenerPolicy: false,
+//   originAgentCluster: false,
+//   contentSecurityPolicy: {
+//     directives: {
+//       defaultSrc: ["'self'"],
+//       styleSrc: ["'self'", "'unsafe-inline'"],
+//       scriptSrc: ["'self'"],
+//       imgSrc: ["'self'", "data:"],
+//       fontSrc: ["'self'"],
+//     }
+//   }
+// }));
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,

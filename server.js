@@ -778,28 +778,37 @@ app.get('/api/assets', (req, res) => {
               };
             }
             
-            // Add current market value to asset
-            asset.current_value_jpy = calculateCurrentValue(asset);
-            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
-            
-            enhancedRows.push(asset);
-            completed++;
-            if (completed === rows.length) {
-              if (req.query.page) {
-                res.json({
-                  assets: enhancedRows,
-                  pagination: {
-                    page: pageNum,
-                    limit: limitNum,
-                    total: total,
-                    totalPages: totalPages
-                  }
-                });
+            // Get latest market valuation for total value
+            db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+              if (!err && valuation && valuation.value_jpy) {
+                // Use actual market valuation if available
+                asset.current_value_jpy = valuation.value_jpy;
               } else {
-                res.json(enhancedRows);
+                // Fallback to legacy calculation
+                asset.current_value_jpy = calculateCurrentValue(asset);
               }
-            }
+              
+              asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+              asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+            
+              enhancedRows.push(asset);
+              completed++;
+              if (completed === rows.length) {
+                if (req.query.page) {
+                  res.json({
+                    assets: enhancedRows,
+                    pagination: {
+                      page: pageNum,
+                      limit: limitNum,
+                      total: total,
+                      totalPages: totalPages
+                    }
+                  });
+                } else {
+                  res.json(enhancedRows);
+                }
+              }
+            });
           });
         } else if (asset.class === 'precious_metal') {
           db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
@@ -811,14 +820,23 @@ app.get('/api/assets', (req, res) => {
               };
             }
             
-            // Get latest market valuation for unit price
-            db.get('SELECT unit_price_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
-              if (!err && valuation && valuation.unit_price_jpy) {
-                asset.market_unit_price_jpy = valuation.unit_price_jpy;
+            // Get latest market valuation for unit price and total value
+            db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+              if (!err && valuation) {
+                if (valuation.unit_price_jpy) {
+                  asset.market_unit_price_jpy = valuation.unit_price_jpy;
+                }
+                if (valuation.value_jpy) {
+                  // Use actual market valuation if available
+                  asset.current_value_jpy = valuation.value_jpy;
+                } else {
+                  // Fallback to legacy calculation
+                  asset.current_value_jpy = calculateCurrentValue(asset);
+                }
+              } else {
+                // No market valuation available, use legacy calculation
+                asset.current_value_jpy = calculateCurrentValue(asset);
               }
-              
-              // Add current market value to asset
-              asset.current_value_jpy = calculateCurrentValue(asset);
               asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
               asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
               
@@ -887,14 +905,47 @@ app.get('/api/assets/:id', (req, res) => {
           asset.precious_metal_details = details;
         }
         
-        // Get latest market valuation for unit price
-        db.get('SELECT unit_price_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
-          if (!err && valuation && valuation.unit_price_jpy) {
-            asset.market_unit_price_jpy = valuation.unit_price_jpy;
+        // Get latest market valuation for unit price and total value
+        db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+          if (!err && valuation) {
+            if (valuation.unit_price_jpy) {
+              asset.market_unit_price_jpy = valuation.unit_price_jpy;
+            }
+            if (valuation.value_jpy) {
+              // Use actual market valuation if available
+              asset.current_value_jpy = valuation.value_jpy;
+            } else {
+              // Fallback to legacy calculation
+              asset.current_value_jpy = calculateCurrentValue(asset);
+            }
+          } else {
+            // No market valuation available, use legacy calculation
+            asset.current_value_jpy = calculateCurrentValue(asset);
+          }
+          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          
+          res.json(asset);
+        });
+      });
+    } else if (asset.class === 'jp_stock' || asset.class === 'us_stock') {
+      // Handle stock assets
+      const detailsTable = asset.class === 'jp_stock' ? 'jp_stocks' : 'us_stocks';
+      db.get(`SELECT * FROM ${detailsTable} WHERE asset_id = ?`, [asset.id], (err, details) => {
+        if (!err && details) {
+          asset.stock_details = details;
+        }
+        
+        // Get latest market valuation for total value
+        db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+          if (!err && valuation && valuation.value_jpy) {
+            // Use actual market valuation if available
+            asset.current_value_jpy = valuation.value_jpy;
+          } else {
+            // Fallback to legacy calculation
+            asset.current_value_jpy = calculateCurrentValue(asset);
           }
           
-          // Add current market value to asset
-          asset.current_value_jpy = calculateCurrentValue(asset);
           asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
           asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
           
@@ -902,12 +953,22 @@ app.get('/api/assets/:id', (req, res) => {
         });
       });
     } else {
-      // Add current market value to asset
-      asset.current_value_jpy = calculateCurrentValue(asset);
-      asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-      asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
-      
-      res.json(asset);
+      // Handle other asset classes
+      // Get latest market valuation if available
+      db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        if (!err && valuation && valuation.value_jpy) {
+          // Use actual market valuation if available
+          asset.current_value_jpy = valuation.value_jpy;
+        } else {
+          // Fallback to legacy calculation
+          asset.current_value_jpy = calculateCurrentValue(asset);
+        }
+        
+        asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+        asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+        
+        res.json(asset);
+      });
     }
   });
 });

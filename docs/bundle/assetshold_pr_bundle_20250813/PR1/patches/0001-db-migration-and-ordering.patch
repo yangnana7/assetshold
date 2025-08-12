@@ -1,0 +1,19 @@
+*** a/server.js
+--- b/server.js
+@@
+-// existing DB logic...
++// ensure latest valuation query uses DESC order (as_of, id) to avoid stale pick
++// Example utility (adapt to your DAO layer):
++async function getLatestValuation(db, assetId) {
++  return new Promise((resolve, reject) => {
++    db.get(`SELECT * FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1`, [assetId], (err, row) => {
++      if (err) return reject(err);
++      resolve(row || null);
++    });
++  });
++}
++
++// run migrations on startup (optional but recommended)
++if (process.env.APPLY_MIGRATIONS === '1') {
++  require('./scripts/apply-migrations');
++}

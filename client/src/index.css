@@ -78,6 +78,7 @@ body {
 /* Market Data Status Bar */
 .market-status-bar {
   display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 1rem;
   padding: 0.75rem 1rem;
@@ -85,6 +86,12 @@ body {
   border-radius: 6px;
   margin-bottom: 2rem;
   border-left: 4px solid #6c757d;
+}
+
+.market-status-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 .market-status-indicator {
@@ -125,7 +132,42 @@ body {
 
 .refresh-valuation-btn:hover {
   background: #e9ecef;
-  border-color: #adb5bd;
+}
+
+.market-refresh-all-btn {
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.market-refresh-all-btn:hover:not(:disabled) {
+  background: #0056b3;
+  transform: translateY(-1px);
+}
+
+.market-refresh-all-btn:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.asset-unit-price {
+  font-size: 0.75rem;
+  color: #6c757d;
+  margin-top: 0.25rem;
+  font-style: italic;
+}
+
+.asset-current-value-label {
+  font-size: 0.75rem;
+  color: #6c757d;
+  margin-bottom: 0.25rem;
 }
 
 .dashboard-grid {
@@ -741,9 +783,10 @@ body {
 
 .asset-details-block {
   background-color: #fcfcfc;
-  padding: 10px;
+  padding: 8px;
   border-radius: 6px;
   border: 1px solid #f0f0f0;
+  max-width: 66%;
 }
 
 .asset-details-block .asset-detail-info {

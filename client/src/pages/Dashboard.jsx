@@ -81,22 +81,31 @@ function Dashboard() {
     }
   }
 
-  const refreshAssetValuation = async (assetId) => {
+
+  const refreshAllMarketData = async () => {
     try {
-      const response = await axios.post(`/api/valuations/${assetId}/refresh`)
-      console.log('Valuation refreshed:', response.data)
-      // Optionally refresh the assets list
-      fetchAssets(currentPage)
+      setMarketLoading(true)
+      const response = await axios.post('/api/valuations/refresh-all')
+      console.log('All market data refreshed:', response.data)
+      
+      // Show success message
+      alert(`市場データを更新しました。更新件数: ${response.data.updated || 0}件`)
+      
+      // Refresh the assets list and dashboard data
+      await fetchAssets(currentPage)
+      await fetchDashboardData()
     } catch (error) {
-      console.error('Valuation refresh error:', error)
+      console.error('Bulk valuation refresh error:', error)
       // Handle different error codes
       if (error.response?.data?.code === 'market_disabled') {
         alert('市場データが無効になっています')
       } else if (error.response?.data?.code === 'upstream_unavailable') {
         alert('市場データの取得に失敗しました')
       } else {
-        alert('評価額の更新に失敗しました')
+        alert('市場データの更新に失敗しました')
       }
+    } finally {
+      setMarketLoading(false)
     }
   }
 
@@ -227,7 +236,7 @@ function Dashboard() {
             <span className="detail-value">{quantity?.toLocaleString()}株</span>
           </div>
           <div className="detail-line">
-            <span className="detail-label">平均単価:</span>
+            <span className="detail-label">取得単価:</span>
             <span className="detail-value">${avg_price_usd?.toFixed(2)}</span>
           </div>
         </div>
@@ -247,7 +256,7 @@ function Dashboard() {
             <span className="detail-value">{quantity?.toLocaleString()}株</span>
           </div>
           <div className="detail-line">
-            <span className="detail-label">平均単価:</span>
+            <span className="detail-label">取得単価:</span>
             <span className="detail-value">¥{avg_price_jpy?.toLocaleString()}</span>
           </div>
         </div>
@@ -267,7 +276,7 @@ function Dashboard() {
             <span className="detail-value">{weight_g}g</span>
           </div>
           <div className="detail-line">
-            <span className="detail-label">単価:</span>
+            <span className="detail-label">取得単価:</span>
             <span className="detail-value">¥{unit_price_jpy?.toLocaleString()}/g</span>
           </div>
           {purity && (
@@ -291,11 +300,23 @@ function Dashboard() {
           <div className={`market-status-indicator ${marketStatus.enabled ? 'enabled' : 'disabled'}`}>
             市場データ: {marketStatus.enabled ? '有効' : '無効'}
           </div>
-          {marketStatus.enabled && (
-            <div className="market-providers">
-              Stock: {marketStatus.provider.stock} | FX: {marketStatus.provider.fx}
-            </div>
-          )}
+          <div className="market-status-controls">
+            {marketStatus.enabled && (
+              <div className="market-providers">
+                Stock: {marketStatus.provider.stock} | FX: {marketStatus.provider.fx} | Precious Metal: {marketStatus.provider.precious_metal}
+              </div>
+            )}
+            {marketStatus.enabled && (
+              <button 
+                className="market-refresh-all-btn"
+                onClick={refreshAllMarketData}
+                disabled={marketLoading}
+                title="全ての市場データを更新（米国株・日本株・貴金属）"
+              >
+                {marketLoading ? '更新中...' : '市場更新'}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -457,6 +478,9 @@ function Dashboard() {
                     </div>
                   </div>
                   <div className="asset-card-right">
+                    <div className="asset-current-value-label">
+                      評価額：
+                    </div>
                     <div className={`asset-current-value ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
                       {formatCurrency(asset.current_value_jpy || asset.book_value_jpy)}
                     </div>
@@ -467,14 +491,10 @@ function Dashboard() {
                       <div>{formatCurrency(asset.gain_loss_jpy || 0)}</div>
                       <div className="percentage">({asset.gain_loss_percentage || '0.00'}%)</div>
                     </div>
-                    {marketStatus?.enabled && (asset.class === 'us_stock' || asset.class === 'jp_stock') && (
-                      <button 
-                        className="refresh-valuation-btn"
-                        onClick={() => refreshAssetValuation(asset.id)}
-                        title="市場価格を更新"
-                      >
-                        🔄
-                      </button>
+                    {(asset.class === 'us_stock' || asset.class === 'jp_stock' || asset.class === 'precious_metal') && getMarketUnitPrice(asset) && (
+                      <div className="asset-unit-price">
+                        時価：{getMarketUnitPrice(asset)}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -504,6 +524,59 @@ function getAssetClassName(classKey) {
   }
   
   return classNames[classKey] || classKey
+}
+
+function getMarketUnitPrice(asset) {
+  // Calculate market unit price for stocks and precious metals
+  if (asset.class === 'us_stock' && asset.stock_details) {
+    const { quantity } = asset.stock_details
+    if (quantity > 0) {
+      const totalValue = asset.current_value_jpy || asset.book_value_jpy
+      const unitPrice = totalValue / quantity
+      return `¥${unitPrice.toLocaleString()} /株`
+    }
+  }
+  
+  if (asset.class === 'jp_stock' && asset.stock_details) {
+    const { quantity } = asset.stock_details
+    if (quantity > 0) {
+      const totalValue = asset.current_value_jpy || asset.book_value_jpy
+      const unitPrice = totalValue / quantity
+      return `¥${unitPrice.toLocaleString()} /株`
+    }
+  }
+  
+  if (asset.class === 'precious_metal' && asset.precious_metal_details) {
+    const { weight_g, purity, metal } = asset.precious_metal_details
+    if (weight_g > 0) {
+      // Use market unit price calculation if available
+      if (asset.market_unit_price_jpy) {
+        return `¥${asset.market_unit_price_jpy.toLocaleString()} /g`
+      }
+      
+      // Calculate correct unit price based on purity and base market price
+      // Base prices from Tanaka Kikinzoku (providers/tanaka.js)
+      const baseMarketPrices = {
+        'gold': 17752,
+        'platinum': 7033,
+        'silver': 202.29,
+        'palladium': 6500
+      }
+      
+      const basePrice = baseMarketPrices[metal?.toLowerCase()] || 0
+      if (basePrice > 0 && purity > 0) {
+        const purityAdjustedPrice = basePrice * purity
+        return `¥${purityAdjustedPrice.toLocaleString()} /g`
+      }
+      
+      // Fallback to legacy calculation if base price not available
+      const totalValue = asset.current_value_jpy || asset.book_value_jpy
+      const unitPrice = totalValue / weight_g
+      return `¥${unitPrice.toLocaleString()} /g`
+    }
+  }
+  
+  return null
 }
 
 function getLiquidityTierName(tier) {

@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const session = require('express-session');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
@@ -69,19 +71,32 @@ app.use(cors({
   credentials: true
 }));
 
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET) { 
+  console.error('SESSION_SECRET is required'); 
+  process.exit(1); 
+}
+
+app.use(helmet());
 app.use(session({
-  secret: 'portfolio-secret-key',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000
+  }
 }));
 
 // Market data providers (BDD requirement 4.3)
-const { makeStockProvider, makeFxProvider } = require('./providers/registry');
+const { makeStockProvider, makeFxProvider, makePreciousMetalProvider } = require('./providers/registry');
 
 // Initialize providers
 const stockProvider = makeStockProvider(MARKET_ENABLE);
 const fxProvider = makeFxProvider(MARKET_ENABLE);
+const preciousMetalProvider = makePreciousMetalProvider(MARKET_ENABLE);
 
 // Cache strategy implementation (BDD requirement 4.4)
 const CACHE_TTL = {
@@ -245,13 +260,26 @@ async function calculateMarketValue(asset) {
     }
     
     if (assetClass === 'precious_metal' && asset.precious_metal_details) {
-      // For precious metals, we might use spot prices
-      // For now, return the current static calculation
+      const { metal, weight_g, purity } = asset.precious_metal_details;
+      const key = `precious_metal:${metal}`;
+      
+      const priceData = await fetchWithCache(key, CACHE_TTL.stock,
+        () => preciousMetalProvider.getQuote(metal, 'JP')
+      );
+      
+      // Calculate price per gram adjusted for purity
+      // Pure metal price * purity ratio
+      const purityAdjustedPrice = priceData.price * purity;
+      
+      // Calculate total value: adjusted price per gram * weight in grams
+      const valueJpy = roundDown2(purityAdjustedPrice * weight_g);
+      
       return {
-        value_jpy: asset.book_value_jpy,
-        as_of: new Date().toISOString(),
+        value_jpy: Math.floor(valueJpy),
+        unit_price_jpy: roundDown2(purityAdjustedPrice),
+        as_of: priceData.asOf,
         fx_context: null,
-        stale: false
+        stale: priceData.stale
       };
     }
     
@@ -435,10 +463,76 @@ function logAudit(tableName, recordId, action, oldValues, newValues, userId, sou
   stmt.finalize();
 }
 
+// Helper functions for user management
+function countUsers() {
+  return new Promise((resolve, reject) => {
+    db.get("SELECT COUNT(*) as count FROM users", (err, row) => {
+      if (err) return reject(err);
+      resolve(row.count);
+    });
+  });
+}
+
+function createAdminUser(username, password) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      db.run("INSERT INTO users (username, password) VALUES (?, ?)", 
+        [username, hashedPassword], 
+        function(err) {
+          if (err) return reject(err);
+          resolve(this.lastID);
+        }
+      );
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 // Routes
 
+// Setup routes
+app.get('/api/setup/status', async (req, res) => {
+  try {
+    const userCount = await countUsers();
+    res.json({ 
+      adminExists: userCount > 0, 
+      setupRequired: userCount === 0 
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.post('/api/setup', async (req, res) => {
+  try {
+    const userCount = await countUsers();
+    if (userCount > 0) {
+      return res.status(400).json({ error: 'Admin user already exists' });
+    }
+    
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+    
+    await createAdminUser(username, password);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Setup error:', err);
+    res.status(500).json({ error: 'Setup failed' });
+  }
+});
+
 // Authentication routes
-app.post('/api/login', (req, res) => {
+const loginLimiter = rateLimit({ 
+  windowMs: 60 * 1000, 
+  max: 5,
+  message: { error: 'Too many login attempts, please try again later' }
+});
+
+app.post('/api/login', loginLimiter, (req, res) => {
   const { username, password } = req.body;
   
   db.get("SELECT * FROM users WHERE username = ?", [username], (err, user) => {
@@ -764,28 +858,37 @@ app.get('/api/assets', (req, res) => {
               };
             }
             
-            // Add current market value to asset
-            asset.current_value_jpy = calculateCurrentValue(asset);
-            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
-            
-            enhancedRows.push(asset);
-            completed++;
-            if (completed === rows.length) {
-              if (req.query.page) {
-                res.json({
-                  assets: enhancedRows,
-                  pagination: {
-                    page: pageNum,
-                    limit: limitNum,
-                    total: total,
-                    totalPages: totalPages
-                  }
-                });
+            // Get latest market valuation for total value
+            db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+              if (!err && valuation && valuation.value_jpy) {
+                // Use actual market valuation if available
+                asset.current_value_jpy = valuation.value_jpy;
               } else {
-                res.json(enhancedRows);
+                // Fallback to legacy calculation
+                asset.current_value_jpy = calculateCurrentValue(asset);
               }
-            }
+              
+              asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+              asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+            
+              enhancedRows.push(asset);
+              completed++;
+              if (completed === rows.length) {
+                if (req.query.page) {
+                  res.json({
+                    assets: enhancedRows,
+                    pagination: {
+                      page: pageNum,
+                      limit: limitNum,
+                      total: total,
+                      totalPages: totalPages
+                    }
+                  });
+                } else {
+                  res.json(enhancedRows);
+                }
+              }
+            });
           });
         } else if (asset.class === 'precious_metal') {
           db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
@@ -797,28 +900,44 @@ app.get('/api/assets', (req, res) => {
               };
             }
             
-            // Add current market value to asset
-            asset.current_value_jpy = calculateCurrentValue(asset);
-            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
-            
-            enhancedRows.push(asset);
-            completed++;
-            if (completed === rows.length) {
-              if (req.query.page) {
-                res.json({
-                  assets: enhancedRows,
-                  pagination: {
-                    page: pageNum,
-                    limit: limitNum,
-                    total: total,
-                    totalPages: totalPages
-                  }
-                });
+            // Get latest market valuation for unit price and total value
+            db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+              if (!err && valuation) {
+                if (valuation.unit_price_jpy) {
+                  asset.market_unit_price_jpy = valuation.unit_price_jpy;
+                }
+                if (valuation.value_jpy) {
+                  // Use actual market valuation if available
+                  asset.current_value_jpy = valuation.value_jpy;
+                } else {
+                  // Fallback to legacy calculation
+                  asset.current_value_jpy = calculateCurrentValue(asset);
+                }
               } else {
-                res.json(enhancedRows);
+                // No market valuation available, use legacy calculation
+                asset.current_value_jpy = calculateCurrentValue(asset);
               }
-            }
+              asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+              asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+              
+              enhancedRows.push(asset);
+              completed++;
+              if (completed === rows.length) {
+                if (req.query.page) {
+                  res.json({
+                    assets: enhancedRows,
+                    pagination: {
+                      page: pageNum,
+                      limit: limitNum,
+                      total: total,
+                      totalPages: totalPages
+                    }
+                  });
+                } else {
+                  res.json(enhancedRows);
+                }
+              }
+            });
           });
         } else {
           // Add current market value to asset
@@ -857,7 +976,80 @@ app.get('/api/assets/:id', (req, res) => {
     if (!row) {
       return res.status(404).json({ error: 'Asset not found' });
     }
-    res.json(row);
+    
+    const asset = row;
+    
+    if (asset.class === 'precious_metal') {
+      db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
+        if (!err && details) {
+          asset.precious_metal_details = details;
+        }
+        
+        // Get latest market valuation for unit price and total value
+        db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+          if (!err && valuation) {
+            if (valuation.unit_price_jpy) {
+              asset.market_unit_price_jpy = valuation.unit_price_jpy;
+            }
+            if (valuation.value_jpy) {
+              // Use actual market valuation if available
+              asset.current_value_jpy = valuation.value_jpy;
+            } else {
+              // Fallback to legacy calculation
+              asset.current_value_jpy = calculateCurrentValue(asset);
+            }
+          } else {
+            // No market valuation available, use legacy calculation
+            asset.current_value_jpy = calculateCurrentValue(asset);
+          }
+          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          
+          res.json(asset);
+        });
+      });
+    } else if (asset.class === 'jp_stock' || asset.class === 'us_stock') {
+      // Handle stock assets
+      const detailsTable = asset.class === 'jp_stock' ? 'jp_stocks' : 'us_stocks';
+      db.get(`SELECT * FROM ${detailsTable} WHERE asset_id = ?`, [asset.id], (err, details) => {
+        if (!err && details) {
+          asset.stock_details = details;
+        }
+        
+        // Get latest market valuation for total value
+        db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+          if (!err && valuation && valuation.value_jpy) {
+            // Use actual market valuation if available
+            asset.current_value_jpy = valuation.value_jpy;
+          } else {
+            // Fallback to legacy calculation
+            asset.current_value_jpy = calculateCurrentValue(asset);
+          }
+          
+          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          
+          res.json(asset);
+        });
+      });
+    } else {
+      // Handle other asset classes
+      // Get latest market valuation if available
+      db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        if (!err && valuation && valuation.value_jpy) {
+          // Use actual market valuation if available
+          asset.current_value_jpy = valuation.value_jpy;
+        } else {
+          // Fallback to legacy calculation
+          asset.current_value_jpy = calculateCurrentValue(asset);
+        }
+        
+        asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+        asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+        
+        res.json(asset);
+      });
+    }
   });
 });
 
@@ -1087,6 +1279,9 @@ function insertClassSpecificData(record, assetId, callback) {
   }
 }
 
+// Import CSV validation
+const { validateHeaders, validateRow } = require('./server/csv/normalize');
+
 // CSV Import (File Upload)
 app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) => {
   if (!req.file) {
@@ -1104,16 +1299,15 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
     }
     
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-    const requiredHeaders = ['class', 'name', 'book_value_jpy', 'liquidity_tier'];
     
-    // Validate headers
-    for (const required of requiredHeaders) {
-      if (!headers.includes(required)) {
-        return res.status(400).json({ 
-          error: `必須カラム '${required}' がありません`,
-          details: `ヘッダーに以下の必須カラムを含めてください: ${requiredHeaders.join(', ')}`
-        });
-      }
+    // Validate headers with enhanced validation
+    try {
+      validateHeaders(headers);
+    } catch (err) {
+      return res.status(400).json({ 
+        error: `ヘッダー検証エラー: ${err.message}`,
+        details: `必要なヘッダー: class, name, acquired_at, book_value_jpy, liquidity_tier`
+      });
     }
     
     // Process data rows
@@ -1131,27 +1325,12 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
         record[header] = values[idx];
       });
       
-      // Validate required fields
-      if (!record.class || !record.name || !record.book_value_jpy || !record.liquidity_tier) {
-        throw new Error(`行 ${i + 1}: 必須項目が不足しています`);
+      // Enhanced row validation
+      try {
+        validateRow(record);
+      } catch (err) {
+        throw new Error(`行 ${i + 1}: ${err.message}`);
       }
-      
-      // Parse numeric values - handle currency formats
-      let bookValueStr = record.book_value_jpy.toString().trim();
-      
-      // Remove currency symbols, commas, and quotes
-      bookValueStr = bookValueStr
-        .replace(/[¥$€£,"""]/g, '')  // Remove currency symbols and commas
-        .replace(/[^\d.-]/g, '');    // Keep only digits, dots, and minus
-      
-      const bookValue = parseInt(bookValueStr) || parseFloat(bookValueStr);
-      if (isNaN(bookValue) || bookValue <= 0) {
-        throw new Error(`行 ${i + 1}: 簿価が無効です (入力値: "${record.book_value_jpy}")`);
-      }
-      
-      record.book_value_jpy = bookValue;
-      record.note = record.note || '';
-      record.valuation_source = record.valuation_source || 'manual';
       
       results.push(record);
     }
@@ -1303,8 +1482,8 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
 app.get('/api/export', requireAuth, (req, res) => {
   const format = req.query.format || 'csv';
   
-  if (format !== 'csv') {
-    return res.status(400).json({ error: 'Only CSV format supported currently' });
+  if (!['csv', 'json', 'md'].includes(format)) {
+    return res.status(400).json({ error: 'Supported formats: csv, json, md' });
   }
   
   db.all('SELECT * FROM assets ORDER BY class, name', (err, assets) => {
@@ -1312,8 +1491,23 @@ app.get('/api/export', requireAuth, (req, res) => {
       return res.status(500).json({ error: err.message });
     }
     
+    if (format === 'json') {
+      res.setHeader('Content-Disposition', 'attachment; filename="portfolio.json"');
+      res.setHeader('Content-Type', 'application/json');
+      return res.json(assets);
+    }
+    
+    if (format === 'md') {
+      const markdown = '# Portfolio Export\n\n' +
+        assets.map(a => `## ${a.name}\n- Class: ${a.class}\n- Value: ¥${a.book_value_jpy?.toLocaleString() || 'N/A'}\n- Tier: ${a.liquidity_tier}\n`).join('\n');
+      res.setHeader('Content-Disposition', 'attachment; filename="portfolio.md"');
+      res.setHeader('Content-Type', 'text/markdown');
+      return res.send(markdown);
+    }
+    
+    // CSV format
     const csvWriter = createCsvWriter({
-      path: path.join(__dirname, 'data', 'portfolio.csv'),
+      path: path.join(__dirname, 'data', 'portfolio_export.csv'),
       header: [
         { id: 'class', title: 'class' },
         { id: 'name', title: 'name' },
@@ -1328,7 +1522,7 @@ app.get('/api/export', requireAuth, (req, res) => {
     
     csvWriter.writeRecords(assets)
       .then(() => {
-        res.download(path.join(__dirname, 'data', 'portfolio.csv'));
+        res.download(path.join(__dirname, 'data', 'portfolio_export.csv'));
       })
       .catch(error => {
         res.status(500).json({ error: error.message });
@@ -1395,12 +1589,15 @@ app.post('/api/valuations/:assetId/refresh', async (req, res) => {
 
 async function processMarketValuation(asset, req, res) {
   try {
+    console.log('Processing market valuation for asset:', asset.id, asset.class, asset.name);
+    console.log('Asset precious_metal_details:', asset.precious_metal_details);
     const valuation = await calculateMarketValue(asset);
+    console.log('Calculated valuation:', valuation);
     
     // Save to valuations table
     db.run(
-      'INSERT INTO valuations (asset_id, as_of, value_jpy, fx_context) VALUES (?, ?, ?, ?)',
-      [asset.id, valuation.as_of, valuation.value_jpy, valuation.fx_context],
+      'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
+      [asset.id, valuation.as_of, valuation.value_jpy, valuation.unit_price_jpy, valuation.fx_context],
       function(err) {
         if (err) {
           console.error('Failed to save valuation:', err);
@@ -1413,6 +1610,7 @@ async function processMarketValuation(asset, req, res) {
 
         res.json({
           value_jpy: valuation.value_jpy,
+          unit_price_jpy: valuation.unit_price_jpy,
           as_of: valuation.as_of,
           fx_context: valuation.fx_context,
           stale: valuation.stale
@@ -1429,13 +1627,119 @@ async function processMarketValuation(asset, req, res) {
   }
 }
 
+// POST /api/valuations/refresh-all - Bulk market data refresh for all supported assets
+app.post('/api/valuations/refresh-all', async (req, res) => {
+  if (!MARKET_ENABLE) {
+    return res.status(403).json({ code: 'market_disabled', message: 'Market data is disabled' });
+  }
+
+  try {
+    // Get all assets that support market valuation
+    const supportedAssetClasses = ['us_stock', 'jp_stock', 'precious_metal'];
+    const query = `SELECT * FROM assets WHERE class IN (${supportedAssetClasses.map(() => '?').join(',')})`;
+    
+    db.all(query, supportedAssetClasses, async (err, assets) => {
+      if (err) {
+        return res.status(500).json({ error: 'Failed to fetch assets' });
+      }
+
+      let updatedCount = 0;
+      let errorCount = 0;
+      const results = [];
+
+      // Process assets sequentially to avoid overwhelming the providers
+      for (const asset of assets) {
+        try {
+          // Get asset-specific details
+          let detailsQuery = '';
+          let detailsTable = '';
+
+          if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+            detailsTable = asset.class === 'us_stock' ? 'us_stocks' : 'jp_stocks';
+            detailsQuery = `SELECT * FROM ${detailsTable} WHERE asset_id = ?`;
+          } else if (asset.class === 'precious_metal') {
+            detailsTable = 'precious_metals';
+            detailsQuery = `SELECT * FROM ${detailsTable} WHERE asset_id = ?`;
+          }
+
+          if (detailsQuery) {
+            const details = await new Promise((resolve, reject) => {
+              db.get(detailsQuery, [asset.id], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+              });
+            });
+
+            if (details) {
+              if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+                asset.stock_details = details;
+              } else if (asset.class === 'precious_metal') {
+                asset.precious_metal_details = details;
+              }
+
+              // Calculate market valuation
+              const valuation = await calculateMarketValue(asset);
+
+              // Save to valuations table
+              await new Promise((resolve, reject) => {
+                db.run(
+                  'INSERT INTO valuations (asset_id, as_of, value_jpy, fx_context) VALUES (?, ?, ?, ?)',
+                  [asset.id, valuation.as_of, valuation.value_jpy, valuation.fx_context],
+                  function(err) {
+                    if (err) reject(err);
+                    else resolve();
+                  }
+                );
+              });
+
+              // Log audit
+              logAudit('assets', asset.id, 'valuation_refresh_bulk', null, valuation, 
+                req.session.user ? req.session.user.id : 'guest');
+
+              results.push({
+                asset_id: asset.id,
+                name: asset.name,
+                class: asset.class,
+                value_jpy: valuation.value_jpy,
+                stale: valuation.stale
+              });
+
+              updatedCount++;
+            }
+          }
+        } catch (error) {
+          console.error(`Failed to update valuation for asset ${asset.id}:`, error);
+          errorCount++;
+        }
+      }
+
+      res.json({
+        message: 'Bulk market data refresh completed',
+        updated: updatedCount,
+        errors: errorCount,
+        total: assets.length,
+        results: results
+      });
+    });
+  } catch (error) {
+    console.error('Bulk valuation refresh error:', error);
+    if (error.code === 'market_disabled') {
+      return res.status(403).json(error);
+    } else if (error.code === 'upstream_unavailable') {
+      return res.status(502).json(error);
+    }
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/market/status
 app.get('/api/market/status', (req, res) => {
   res.json({
     enabled: MARKET_ENABLE,
     provider: {
       stock: stockProvider.name,
-      fx: fxProvider.name
+      fx: fxProvider.name,
+      precious_metal: preciousMetalProvider.name
     },
     now: new Date().toISOString()
   });

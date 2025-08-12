@@ -8,8 +8,23 @@ class TanakaPreciousMetalProvider extends StockProvider {
 
   async getQuote(metal, exchange) {
     try {
-      // Mock implementation using static data from Tanaka Kikinzoku website
-      // In production, this would scrape the actual website or use an API
+      // Use real Tanaka implementation for gold
+      if (metal.toLowerCase() === 'gold') {
+        try {
+          const { getGoldJPYPerGram } = require('./metal/TanakaProvider');
+          const goldData = await getGoldJPYPerGram();
+          return new PricePoint(
+            goldData.price_jpy_per_g,
+            'JPY',
+            goldData.as_of
+          );
+        } catch (fetchError) {
+          console.error('Tanaka real data fetch failed, using fallback:', fetchError.message);
+          // Fall back to static data
+        }
+      }
+      
+      // Fallback to static data for other metals or when real fetch fails
       const priceData = this._getTanakaPriceData(metal);
       
       return new PricePoint(

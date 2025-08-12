@@ -4,7 +4,14 @@
       "Bash(mkdir:*)",
       "Bash(npm install)",
       "Bash(rm:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(sqlite3:*)",
+      "WebFetch(domain:finance.yahoo.co.jp)",
+      "Bash(powershell:*)",
+      "Bash(set MARKET_ENABLE=1)",
+      "Bash(node server.js)",
+      "Bash(node:*)",
+      "Bash(npm install:*)"
     ],
     "deny": []
   }

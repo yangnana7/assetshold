@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const session = require('express-session');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
@@ -69,11 +71,23 @@ app.use(cors({
   credentials: true
 }));
 
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET) { 
+  console.error('SESSION_SECRET is required'); 
+  process.exit(1); 
+}
+
+app.use(helmet());
 app.use(session({
-  secret: 'portfolio-secret-key',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000
+  }
 }));
 
 // Market data providers (BDD requirement 4.3)
@@ -449,10 +463,76 @@ function logAudit(tableName, recordId, action, oldValues, newValues, userId, sou
   stmt.finalize();
 }
 
+// Helper functions for user management
+function countUsers() {
+  return new Promise((resolve, reject) => {
+    db.get("SELECT COUNT(*) as count FROM users", (err, row) => {
+      if (err) return reject(err);
+      resolve(row.count);
+    });
+  });
+}
+
+function createAdminUser(username, password) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      db.run("INSERT INTO users (username, password) VALUES (?, ?)", 
+        [username, hashedPassword], 
+        function(err) {
+          if (err) return reject(err);
+          resolve(this.lastID);
+        }
+      );
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 // Routes
 
+// Setup routes
+app.get('/api/setup/status', async (req, res) => {
+  try {
+    const userCount = await countUsers();
+    res.json({ 
+      adminExists: userCount > 0, 
+      setupRequired: userCount === 0 
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.post('/api/setup', async (req, res) => {
+  try {
+    const userCount = await countUsers();
+    if (userCount > 0) {
+      return res.status(400).json({ error: 'Admin user already exists' });
+    }
+    
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+    
+    await createAdminUser(username, password);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Setup error:', err);
+    res.status(500).json({ error: 'Setup failed' });
+  }
+});
+
 // Authentication routes
-app.post('/api/login', (req, res) => {
+const loginLimiter = rateLimit({ 
+  windowMs: 60 * 1000, 
+  max: 5,
+  message: { error: 'Too many login attempts, please try again later' }
+});
+
+app.post('/api/login', loginLimiter, (req, res) => {
   const { username, password } = req.body;
   
   db.get("SELECT * FROM users WHERE username = ?", [username], (err, user) => {
@@ -779,7 +859,7 @@ app.get('/api/assets', (req, res) => {
             }
             
             // Get latest market valuation for total value
-            db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+            db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
               if (!err && valuation && valuation.value_jpy) {
                 // Use actual market valuation if available
                 asset.current_value_jpy = valuation.value_jpy;
@@ -821,7 +901,7 @@ app.get('/api/assets', (req, res) => {
             }
             
             // Get latest market valuation for unit price and total value
-            db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+            db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
               if (!err && valuation) {
                 if (valuation.unit_price_jpy) {
                   asset.market_unit_price_jpy = valuation.unit_price_jpy;
@@ -906,7 +986,7 @@ app.get('/api/assets/:id', (req, res) => {
         }
         
         // Get latest market valuation for unit price and total value
-        db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
           if (!err && valuation) {
             if (valuation.unit_price_jpy) {
               asset.market_unit_price_jpy = valuation.unit_price_jpy;
@@ -937,7 +1017,7 @@ app.get('/api/assets/:id', (req, res) => {
         }
         
         // Get latest market valuation for total value
-        db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
           if (!err && valuation && valuation.value_jpy) {
             // Use actual market valuation if available
             asset.current_value_jpy = valuation.value_jpy;
@@ -955,7 +1035,7 @@ app.get('/api/assets/:id', (req, res) => {
     } else {
       // Handle other asset classes
       // Get latest market valuation if available
-      db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY id DESC LIMIT 1', [asset.id], (err, valuation) => {
+      db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
         if (!err && valuation && valuation.value_jpy) {
           // Use actual market valuation if available
           asset.current_value_jpy = valuation.value_jpy;
@@ -1199,6 +1279,9 @@ function insertClassSpecificData(record, assetId, callback) {
   }
 }
 
+// Import CSV validation
+const { validateHeaders, validateRow } = require('./server/csv/normalize');
+
 // CSV Import (File Upload)
 app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) => {
   if (!req.file) {
@@ -1216,16 +1299,15 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
     }
     
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-    const requiredHeaders = ['class', 'name', 'book_value_jpy', 'liquidity_tier'];
     
-    // Validate headers
-    for (const required of requiredHeaders) {
-      if (!headers.includes(required)) {
-        return res.status(400).json({ 
-          error: `必須カラム '${required}' がありません`,
-          details: `ヘッダーに以下の必須カラムを含めてください: ${requiredHeaders.join(', ')}`
-        });
-      }
+    // Validate headers with enhanced validation
+    try {
+      validateHeaders(headers);
+    } catch (err) {
+      return res.status(400).json({ 
+        error: `ヘッダー検証エラー: ${err.message}`,
+        details: `必要なヘッダー: class, name, acquired_at, book_value_jpy, liquidity_tier`
+      });
     }
     
     // Process data rows
@@ -1243,27 +1325,12 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
         record[header] = values[idx];
       });
       
-      // Validate required fields
-      if (!record.class || !record.name || !record.book_value_jpy || !record.liquidity_tier) {
-        throw new Error(`行 ${i + 1}: 必須項目が不足しています`);
+      // Enhanced row validation
+      try {
+        validateRow(record);
+      } catch (err) {
+        throw new Error(`行 ${i + 1}: ${err.message}`);
       }
-      
-      // Parse numeric values - handle currency formats
-      let bookValueStr = record.book_value_jpy.toString().trim();
-      
-      // Remove currency symbols, commas, and quotes
-      bookValueStr = bookValueStr
-        .replace(/[¥$€£,"""]/g, '')  // Remove currency symbols and commas
-        .replace(/[^\d.-]/g, '');    // Keep only digits, dots, and minus
-      
-      const bookValue = parseInt(bookValueStr) || parseFloat(bookValueStr);
-      if (isNaN(bookValue) || bookValue <= 0) {
-        throw new Error(`行 ${i + 1}: 簿価が無効です (入力値: "${record.book_value_jpy}")`);
-      }
-      
-      record.book_value_jpy = bookValue;
-      record.note = record.note || '';
-      record.valuation_source = record.valuation_source || 'manual';
       
       results.push(record);
     }
@@ -1415,8 +1482,8 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
 app.get('/api/export', requireAuth, (req, res) => {
   const format = req.query.format || 'csv';
   
-  if (format !== 'csv') {
-    return res.status(400).json({ error: 'Only CSV format supported currently' });
+  if (!['csv', 'json', 'md'].includes(format)) {
+    return res.status(400).json({ error: 'Supported formats: csv, json, md' });
   }
   
   db.all('SELECT * FROM assets ORDER BY class, name', (err, assets) => {
@@ -1424,8 +1491,23 @@ app.get('/api/export', requireAuth, (req, res) => {
       return res.status(500).json({ error: err.message });
     }
     
+    if (format === 'json') {
+      res.setHeader('Content-Disposition', 'attachment; filename="portfolio.json"');
+      res.setHeader('Content-Type', 'application/json');
+      return res.json(assets);
+    }
+    
+    if (format === 'md') {
+      const markdown = '# Portfolio Export\n\n' +
+        assets.map(a => `## ${a.name}\n- Class: ${a.class}\n- Value: ¥${a.book_value_jpy?.toLocaleString() || 'N/A'}\n- Tier: ${a.liquidity_tier}\n`).join('\n');
+      res.setHeader('Content-Disposition', 'attachment; filename="portfolio.md"');
+      res.setHeader('Content-Type', 'text/markdown');
+      return res.send(markdown);
+    }
+    
+    // CSV format
     const csvWriter = createCsvWriter({
-      path: path.join(__dirname, 'data', 'portfolio.csv'),
+      path: path.join(__dirname, 'data', 'portfolio_export.csv'),
       header: [
         { id: 'class', title: 'class' },
         { id: 'name', title: 'name' },
@@ -1440,7 +1522,7 @@ app.get('/api/export', requireAuth, (req, res) => {
     
     csvWriter.writeRecords(assets)
       .then(() => {
-        res.download(path.join(__dirname, 'data', 'portfolio.csv'));
+        res.download(path.join(__dirname, 'data', 'portfolio_export.csv'));
       })
       .catch(error => {
         res.status(500).json({ error: error.message });

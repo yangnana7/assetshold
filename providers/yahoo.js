@@ -169,16 +169,24 @@ class YahooFxProvider extends FxProvider {
 
   async getRate(pair) {
     try {
-      // Mock implementation - in production, use currency API
-      const mockRate = this._getMockFxRate(pair);
+      // Use real YahooFxProvider implementation
+      const { getFx } = require('./fx/YahooFxProvider');
+      const fxData = await getFx(pair);
       
+      return new PricePoint(
+        fxData.price,
+        'JPY',
+        fxData.as_of
+      );
+    } catch (error) {
+      console.error(`Yahoo FX API failed for ${pair}:`, error.message);
+      // Fallback to mock data if API fails
+      const mockRate = this._getMockFxRate(pair);
       return new PricePoint(
         mockRate,
         'JPY',
         new Date().toISOString()
       );
-    } catch (error) {
-      throw new Error(`Yahoo FX API failed: ${error.message}`);
     }
   }
 

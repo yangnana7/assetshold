@@ -79,7 +79,17 @@ if (!SESSION_SECRET) {
 
 app.use(helmet({
   crossOriginOpenerPolicy: false,
-  originAgentCluster: false
+  originAgentCluster: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:"],
+      fontSrc: ["'self'"],
+      // upgrade-insecure-requests を除外（HTTPでの動作を保証）
+    }
+  }
 }));
 app.use(session({
   secret: SESSION_SECRET,

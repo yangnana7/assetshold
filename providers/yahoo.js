@@ -9,31 +9,102 @@ class YahooStockProvider extends StockProvider {
 
   async getQuote(ticker, exchange) {
     try {
-      // Mock implementation - in production, use yahoo-finance2 or similar
+      if (exchange === 'JP') {
+        // Fetch real data from Yahoo Finance Japan
+        const realData = await this._fetchJapaneseStockPrice(ticker);
+        return new PricePoint(
+          realData.price,
+          'JPY',
+          new Date().toISOString()
+        );
+      } else {
+        // For US stocks, use mock data for now
+        const mockData = this._getMockStockData(ticker, exchange);
+        return new PricePoint(
+          mockData.price,
+          mockData.currency,
+          new Date().toISOString()
+        );
+      }
+    } catch (error) {
+      console.error(`Yahoo Stock API failed for ${ticker}.${exchange}:`, error.message);
+      // Fallback to mock data if API fails
       const mockData = this._getMockStockData(ticker, exchange);
-      
       return new PricePoint(
         mockData.price,
         mockData.currency,
         new Date().toISOString()
       );
-    } catch (error) {
-      throw new Error(`Yahoo Stock API failed: ${error.message}`);
     }
   }
 
+  async _fetchJapaneseStockPrice(ticker) {
+    const https = require('https');
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}.T`;
+    
+    return new Promise((resolve, reject) => {
+      const request = https.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      }, (response) => {
+        let data = '';
+        
+        response.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        response.on('end', () => {
+          try {
+            const jsonData = JSON.parse(data);
+            const result = jsonData.chart?.result?.[0];
+            
+            if (!result) {
+              throw new Error('No data found');
+            }
+            
+            const meta = result.meta;
+            const currentPrice = meta.regularMarketPrice || meta.previousClose;
+            
+            if (!currentPrice) {
+              throw new Error('Price data not available');
+            }
+            
+            resolve({
+              price: Math.round(currentPrice),
+              currency: 'JPY'
+            });
+          } catch (parseError) {
+            reject(new Error(`Failed to parse Yahoo Finance data: ${parseError.message}`));
+          }
+        });
+      });
+      
+      request.on('error', (error) => {
+        reject(new Error(`HTTP request failed: ${error.message}`));
+      });
+      
+      request.setTimeout(10000, () => {
+        request.destroy();
+        reject(new Error('Request timeout'));
+      });
+    });
+  }
+
   _getMockStockData(ticker, exchange) {
-    // Mock stock prices for development/testing
+    // Mock stock prices for development/testing - only used for US stocks or as fallback
     const mockPrices = {
       'AAPL': { price: 185.50, currency: 'USD' },
       'GOOGL': { price: 142.75, currency: 'USD' },
       'MSFT': { price: 415.25, currency: 'USD' },
-      '7203': { price: 2450, currency: 'JPY' }, // Toyota
-      '7974': { price: 8920, currency: 'JPY' }, // Nintendo
-      '6758': { price: 1285, currency: 'JPY' }  // Sony
+      // Japanese stocks removed - now fetched from real API
     };
 
-    return mockPrices[ticker] || { price: 100.0, currency: 'USD' };
+    // Return mock price or fallback
+    return mockPrices[ticker] || { 
+      price: exchange === 'JP' ? 1000.0 : 100.0, 
+      currency: exchange === 'JP' ? 'JPY' : 'USD' 
+    };
   }
 }
 

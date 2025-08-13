@@ -607,29 +607,37 @@ app.get('/api/dashboard', (req, res) => {
   const queries = {
     totalAssets: `SELECT COUNT(*) as count FROM assets`,
     totalValue: `
-      SELECT SUM(COALESCE(latest_val.value_jpy, a.book_value_jpy)) as total 
+      SELECT SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as total 
       FROM assets a
       LEFT JOIN (
-        SELECT 
-          asset_id,
-          value_jpy,
-          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+        SELECT DISTINCT
+          v1.asset_id,
+          v1.value_jpy
+        FROM valuations v1
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) as max_date, MAX(id) as max_id
+          FROM valuations
+          GROUP BY asset_id
+        ) v2 ON v1.asset_id = v2.asset_id AND v1.as_of = v2.max_date AND v1.id = v2.max_id
+      ) v ON a.id = v.asset_id
     `,
     assetsByClass: `
       SELECT 
         a.class, 
         COUNT(*) as count, 
-        SUM(COALESCE(latest_val.value_jpy, a.book_value_jpy)) as total_value 
+        SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as total_value 
       FROM assets a
       LEFT JOIN (
-        SELECT 
-          asset_id,
-          value_jpy,
-          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+        SELECT DISTINCT
+          v1.asset_id,
+          v1.value_jpy
+        FROM valuations v1
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) as max_date, MAX(id) as max_id
+          FROM valuations
+          GROUP BY asset_id
+        ) v2 ON v1.asset_id = v2.asset_id AND v1.as_of = v2.max_date AND v1.id = v2.max_id
+      ) v ON a.id = v.asset_id
       GROUP BY a.class
     `,
     topAssets: `
@@ -637,15 +645,19 @@ app.get('/api/dashboard', (req, res) => {
         a.name, 
         a.note, 
         a.book_value_jpy,
-        COALESCE(latest_val.value_jpy, a.book_value_jpy) as current_value_jpy
+        COALESCE(v.value_jpy, a.book_value_jpy) as current_value_jpy
       FROM assets a
       LEFT JOIN (
-        SELECT 
-          asset_id,
-          value_jpy,
-          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+        SELECT DISTINCT
+          v1.asset_id,
+          v1.value_jpy
+        FROM valuations v1
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) as max_date, MAX(id) as max_id
+          FROM valuations
+          GROUP BY asset_id
+        ) v2 ON v1.asset_id = v2.asset_id AND v1.as_of = v2.max_date AND v1.id = v2.max_id
+      ) v ON a.id = v.asset_id
       ORDER BY current_value_jpy DESC 
       LIMIT 3
     `,
@@ -653,15 +665,19 @@ app.get('/api/dashboard', (req, res) => {
       SELECT 
         strftime('%Y-%m', a.created_at) as month,
         SUM(a.book_value_jpy) as book_value_total,
-        SUM(COALESCE(latest_val.value_jpy, a.book_value_jpy)) as market_value_total
+        SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as market_value_total
       FROM assets a
       LEFT JOIN (
-        SELECT 
-          asset_id,
-          value_jpy,
-          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+        SELECT DISTINCT
+          v1.asset_id,
+          v1.value_jpy
+        FROM valuations v1
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) as max_date, MAX(id) as max_id
+          FROM valuations
+          GROUP BY asset_id
+        ) v2 ON v1.asset_id = v2.asset_id AND v1.as_of = v2.max_date AND v1.id = v2.max_id
+      ) v ON a.id = v.asset_id
       WHERE a.created_at IS NOT NULL 
       GROUP BY strftime('%Y-%m', a.created_at)
       ORDER BY month DESC 
@@ -677,10 +693,16 @@ app.get('/api/dashboard', (req, res) => {
     db.all(query, (err, rows) => {
       if (!err) {
         results[key] = rows;
+        if (key === 'monthlyTrend') {
+          console.log('Monthly trend query result:', rows);
+        }
+      } else {
+        console.error(`Error in ${key} query:`, err);
       }
       completed++;
       
       if (completed === total) {
+        console.log('Dashboard results:', JSON.stringify(results, null, 2));
         res.json(results);
       }
     });

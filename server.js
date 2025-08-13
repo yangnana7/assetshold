@@ -13,6 +13,13 @@ const csv = require('csv-parser');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const multer = require('multer');
 
+// Import new service modules
+const {
+  getTargets, setTargets, getTolerancePct, setTolerancePct,
+  getCurrentByClass, computePlanFromTargets, toCsv
+} = require('./server/rebalance/service');
+const { listComps, addComp, updateComp, deleteComp, estimateFromComps, commitValuation } = require('./server/comps/service');
+
 // MANDATORY PORT CHECK - Must fail if not port 3009
 const REQUIRED_PORT = 3009;
 const port = process.env.PORT || REQUIRED_PORT;
@@ -36,6 +43,12 @@ const app = express();
 // Database initialization
 const dbPath = path.join(__dirname, 'data', 'portfolio.db');
 const db = new sqlite3.Database(dbPath);
+
+// Helper function to get DB connection
+function getDb() {
+  const dbPath = process.env.DB_PATH || path.join(__dirname, 'data', 'portfolio.db');
+  return new sqlite3.Database(dbPath);
+}
 
 // Enable WAL mode for better concurrency and reliability
 db.run('PRAGMA journal_mode = WAL', (err) => {
@@ -593,17 +606,64 @@ app.get('/api/user', (req, res) => {
 app.get('/api/dashboard', (req, res) => {
   const queries = {
     totalAssets: `SELECT COUNT(*) as count FROM assets`,
-    totalValue: `SELECT SUM(book_value_jpy) as total FROM assets`,
-    assetsByClass: `SELECT class, COUNT(*) as count, SUM(book_value_jpy) as total_value FROM assets GROUP BY class`,
-    topAssets: `SELECT name, note, book_value_jpy FROM assets ORDER BY book_value_jpy DESC LIMIT 3`,
+    totalValue: `
+      SELECT SUM(COALESCE(latest_val.value_jpy, a.book_value_jpy)) as total 
+      FROM assets a
+      LEFT JOIN (
+        SELECT 
+          asset_id,
+          value_jpy,
+          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
+        FROM valuations
+      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+    `,
+    assetsByClass: `
+      SELECT 
+        a.class, 
+        COUNT(*) as count, 
+        SUM(COALESCE(latest_val.value_jpy, a.book_value_jpy)) as total_value 
+      FROM assets a
+      LEFT JOIN (
+        SELECT 
+          asset_id,
+          value_jpy,
+          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
+        FROM valuations
+      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+      GROUP BY a.class
+    `,
+    topAssets: `
+      SELECT 
+        a.name, 
+        a.note, 
+        a.book_value_jpy,
+        COALESCE(latest_val.value_jpy, a.book_value_jpy) as current_value_jpy
+      FROM assets a
+      LEFT JOIN (
+        SELECT 
+          asset_id,
+          value_jpy,
+          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
+        FROM valuations
+      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+      ORDER BY current_value_jpy DESC 
+      LIMIT 3
+    `,
     monthlyTrend: `
       SELECT 
-        strftime('%Y-%m', created_at) as month,
-        SUM(book_value_jpy) as book_value_total,
-        SUM(book_value_jpy) as market_value_total
-      FROM assets 
-      WHERE created_at IS NOT NULL 
-      GROUP BY strftime('%Y-%m', created_at)
+        strftime('%Y-%m', a.created_at) as month,
+        SUM(a.book_value_jpy) as book_value_total,
+        SUM(COALESCE(latest_val.value_jpy, a.book_value_jpy)) as market_value_total
+      FROM assets a
+      LEFT JOIN (
+        SELECT 
+          asset_id,
+          value_jpy,
+          ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
+        FROM valuations
+      ) latest_val ON a.id = latest_val.asset_id AND latest_val.rn = 1
+      WHERE a.created_at IS NOT NULL 
+      GROUP BY strftime('%Y-%m', a.created_at)
       ORDER BY month DESC 
       LIMIT 12
     `
@@ -1197,7 +1257,32 @@ app.patch('/api/assets/:id', requireAdmin, (req, res) => {
       }
     });
     
-    if (Object.keys(updates).length === 0) {
+    // Handle class-specific updates
+    const classSpecificUpdates = {};
+    if (currentAsset.class === 'us_stock') {
+      const stockFields = ['ticker', 'exchange', 'quantity', 'avg_price_usd'];
+      stockFields.forEach(field => {
+        if (req.body.hasOwnProperty(field)) {
+          classSpecificUpdates[field] = req.body[field];
+        }
+      });
+    } else if (currentAsset.class === 'jp_stock') {
+      const stockFields = ['code', 'quantity', 'avg_price_jpy'];
+      stockFields.forEach(field => {
+        if (req.body.hasOwnProperty(field)) {
+          classSpecificUpdates[field] = req.body[field];
+        }
+      });
+    } else if (currentAsset.class === 'precious_metal') {
+      const metalFields = ['metal', 'weight_g', 'purity', 'unit_price_jpy'];
+      metalFields.forEach(field => {
+        if (req.body.hasOwnProperty(field)) {
+          classSpecificUpdates[field] = req.body[field];
+        }
+      });
+    }
+    
+    if (Object.keys(updates).length === 0 && Object.keys(classSpecificUpdates).length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
     
@@ -1206,21 +1291,75 @@ app.patch('/api/assets/:id', requireAdmin, (req, res) => {
       updates.note = "";
     }
     
-    updates.updated_at = new Date().toISOString();
-    
-    const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
-    const values = Object.values(updates);
-    values.push(assetId);
-    
-    db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      
+      try {
+        // Update main asset table if needed
+        if (Object.keys(updates).length > 0) {
+          updates.updated_at = new Date().toISOString();
+          
+          const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+          const values = Object.values(updates);
+          values.push(assetId);
+          
+          db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, function(err) {
+            if (err) {
+              db.run('ROLLBACK');
+              return res.status(500).json({ error: err.message });
+            }
+          });
+        }
+        
+        // Update class-specific table if needed
+        if (Object.keys(classSpecificUpdates).length > 0) {
+          if (currentAsset.class === 'us_stock') {
+            const setClause = Object.keys(classSpecificUpdates).map(key => `${key} = ?`).join(', ');
+            const values = Object.values(classSpecificUpdates);
+            values.push(assetId);
+            
+            db.run(`UPDATE us_stocks SET ${setClause} WHERE asset_id = ?`, values, function(err) {
+              if (err) {
+                db.run('ROLLBACK');
+                return res.status(500).json({ error: err.message });
+              }
+            });
+          } else if (currentAsset.class === 'jp_stock') {
+            const setClause = Object.keys(classSpecificUpdates).map(key => `${key} = ?`).join(', ');
+            const values = Object.values(classSpecificUpdates);
+            values.push(assetId);
+            
+            db.run(`UPDATE jp_stocks SET ${setClause} WHERE asset_id = ?`, values, function(err) {
+              if (err) {
+                db.run('ROLLBACK');
+                return res.status(500).json({ error: err.message });
+              }
+            });
+          } else if (currentAsset.class === 'precious_metal') {
+            const setClause = Object.keys(classSpecificUpdates).map(key => `${key} = ?`).join(', ');
+            const values = Object.values(classSpecificUpdates);
+            values.push(assetId);
+            
+            db.run(`UPDATE precious_metals SET ${setClause} WHERE asset_id = ?`, values, function(err) {
+              if (err) {
+                db.run('ROLLBACK');
+                return res.status(500).json({ error: err.message });
+              }
+            });
+          }
+        }
+        
+        db.run('COMMIT');
+        
+        const updatedAsset = { ...currentAsset, ...updates, id: parseInt(assetId) };
+        logAudit('assets', assetId, 'UPDATE', currentAsset, { ...updatedAsset, classSpecific: classSpecificUpdates }, req.session.user.id);
+        
+        res.json(updatedAsset);
+        
+      } catch (error) {
+        db.run('ROLLBACK');
+        return res.status(500).json({ error: error.message });
       }
-      
-      const updatedAsset = { ...currentAsset, ...updates, id: parseInt(assetId) };
-      logAudit('assets', assetId, 'UPDATE', currentAsset, updatedAsset, req.session.user.id);
-      
-      res.json(updatedAsset);
     });
   });
 });
@@ -1763,6 +1902,99 @@ app.get('/api/market/status', (req, res) => {
     },
     now: new Date().toISOString()
   });
+});
+
+// Rebalance API endpoints
+app.get('/api/rebalance/targets', async (req, res) => {
+  try {
+    const db = getDb();
+    const [targets, tol] = await Promise.all([getTargets(db), getTolerancePct(db)]);
+    db.close();
+    res.json({ tolerance_pct: tol, targets });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+app.post('/api/rebalance/targets', async (req, res) => {
+  try {
+    const db = getDb();
+    const { tolerance_pct, targets } = req.body || {};
+    if (tolerance_pct !== undefined) {
+      const v = Number(tolerance_pct);
+      if (!Number.isFinite(v) || v < 0 || v > 50) throw new Error('bad tolerance_pct');
+      await setTolerancePct(db, v);
+    }
+    if (Array.isArray(targets)) {
+      const sum = targets.reduce((s,t)=> s + Number(t.pct||0), 0);
+      if (sum <= 0) throw new Error('targets sum must be > 0');
+      await setTargets(db, targets.map(t=>({class:String(t.class), pct:Number(t.pct)})));
+    }
+    const [ret, tol] = await Promise.all([getTargets(db), getTolerancePct(db)]);
+    db.close();
+    res.json({ ok:true, tolerance_pct: tol, targets: ret });
+  } catch (e) { res.status(400).json({ error: String(e.message || e) }); }
+});
+
+app.get('/api/rebalance/plan', async (req, res) => {
+  try {
+    const to = (req.query.to === 'mid') ? 'mid' : 'target';
+    const tol = Number(req.query.tol || NaN);
+    const minTrade = Number(req.query.min_trade || 0);
+    const useBook = (String(req.query.use_book||'1') === '1');
+    const db = getDb();
+    const [targets, defaultTol] = await Promise.all([getTargets(db), getTolerancePct(db)]);
+    const tolerancePct = Number.isFinite(tol) ? tol : defaultTol;
+    const current = await getCurrentByClass(db, useBook);
+    const plan = computePlanFromTargets(current, targets, tolerancePct, to, minTrade);
+    db.close();
+    const csv = toCsv(current, plan);
+    res.json({ as_of: new Date().toISOString(), total_jpy: current.total, tolerance_pct: tolerancePct, to, min_trade_jpy: minTrade, use_book: useBook, plan, csv });
+  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+});
+
+// Comps API endpoints
+app.get('/api/comps/:assetId', async (req, res) => {
+  try {
+    const db = getDb();
+    const list = await listComps(db, Number(req.params.assetId), Number(req.query.limit||100));
+    db.close(); res.json({ items: list });
+  } catch (e) { res.status(500).json({ error: String(e.message||e) }); }
+});
+
+app.post('/api/comps/:assetId', async (req, res) => {
+  try {
+    const db = getDb();
+    await addComp(db, Number(req.params.assetId), req.body || {});
+    const list = await listComps(db, Number(req.params.assetId), 100);
+    db.close(); res.json({ ok:true, items: list });
+  } catch (e) { res.status(400).json({ error: String(e.message||e) }); }
+});
+
+app.patch('/api/comps/item/:compId', async (req, res) => {
+  try {
+    const db = getDb();
+    await updateComp(db, Number(req.params.compId), req.body || {});
+    db.close(); res.json({ ok:true });
+  } catch (e) { res.status(400).json({ error: String(e.message||e) }); }
+});
+
+app.delete('/api/comps/item/:compId', async (req, res) => {
+  try {
+    const db = getDb();
+    await deleteComp(db, Number(req.params.compId));
+    db.close(); res.json({ ok:true });
+  } catch (e) { res.status(400).json({ error: String(e.message||e) }); }
+});
+
+app.get('/api/comps/:assetId/estimate', async (req, res) => {
+  try {
+    const db = getDb();
+    const method = (req.query.method || 'wmad').toLowerCase();
+    const halfLifeDays = Number(req.query.half_life_days || 90);
+    const commit = String(req.query.commit||'0') === '1';
+    const est = await estimateFromComps(db, Number(req.params.assetId), method, halfLifeDays);
+    if (commit && est.estimate_jpy > 0) await commitValuation(db, Number(req.params.assetId), est);
+    db.close(); res.json({ ok:true, estimate: est, committed: commit });
+  } catch (e) { res.status(400).json({ error: String(e.message||e) }); }
 });
 
 // CSV File Watcher

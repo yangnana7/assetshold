@@ -343,7 +343,7 @@ function Dashboard() {
                     {formatAssetName(asset.name, asset.note)}
                   </span>
                   <span className="asset-value">
-                    {formatCurrency(asset.book_value_jpy)}
+                    {formatCurrency(asset.current_value_jpy || asset.book_value_jpy)}
                   </span>
                 </li>
               ))}

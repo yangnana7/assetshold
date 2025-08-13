@@ -54,22 +54,58 @@ function AssetEditModal({ asset, onClose, onAssetUpdated }) {
       if (asset.class === 'us_stock' && asset.stock_details) {
         const stockFields = ['ticker', 'exchange', 'quantity', 'avg_price_usd']
         stockFields.forEach(key => {
-          if (formData[key] !== asset.stock_details[key]) {
-            updateData[key] = formData[key]
+          const currentValue = asset.stock_details[key]
+          const newValue = formData[key]
+          
+          // Convert to appropriate types for comparison
+          let convertedNew = newValue
+          let convertedCurrent = currentValue
+          
+          if (key === 'quantity' || key === 'avg_price_usd') {
+            convertedNew = parseFloat(newValue) || 0
+            convertedCurrent = parseFloat(currentValue) || 0
+          }
+          
+          if (convertedNew !== convertedCurrent) {
+            updateData[key] = key === 'quantity' || key === 'avg_price_usd' ? convertedNew : newValue
           }
         })
       } else if (asset.class === 'jp_stock' && asset.stock_details) {
         const stockFields = ['code', 'quantity', 'avg_price_jpy']
         stockFields.forEach(key => {
-          if (formData[key] !== asset.stock_details[key]) {
-            updateData[key] = formData[key]
+          const currentValue = asset.stock_details[key]
+          const newValue = formData[key]
+          
+          // Convert to appropriate types for comparison
+          let convertedNew = newValue
+          let convertedCurrent = currentValue
+          
+          if (key === 'quantity' || key === 'avg_price_jpy') {
+            convertedNew = parseFloat(newValue) || 0
+            convertedCurrent = parseFloat(currentValue) || 0
+          }
+          
+          if (convertedNew !== convertedCurrent) {
+            updateData[key] = key === 'quantity' || key === 'avg_price_jpy' ? convertedNew : newValue
           }
         })
       } else if (asset.class === 'precious_metal' && asset.precious_metal_details) {
         const metalFields = ['metal', 'weight_g', 'purity', 'unit_price_jpy']
         metalFields.forEach(key => {
-          if (formData[key] !== asset.precious_metal_details[key]) {
-            updateData[key] = formData[key]
+          const currentValue = asset.precious_metal_details[key]
+          const newValue = formData[key]
+          
+          // Convert to appropriate types for comparison
+          let convertedNew = newValue
+          let convertedCurrent = currentValue
+          
+          if (key === 'weight_g' || key === 'purity' || key === 'unit_price_jpy') {
+            convertedNew = parseFloat(newValue) || 0
+            convertedCurrent = parseFloat(currentValue) || 0
+          }
+          
+          if (convertedNew !== convertedCurrent) {
+            updateData[key] = key === 'weight_g' || key === 'purity' || key === 'unit_price_jpy' ? convertedNew : newValue
           }
         })
       }
@@ -83,6 +119,8 @@ function AssetEditModal({ asset, onClose, onAssetUpdated }) {
         onClose()
         return
       }
+
+      console.log('Update data being sent:', updateData)
 
       const response = await axios.patch(`/api/assets/${asset.id}`, updateData, {
         withCredentials: true

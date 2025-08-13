@@ -1282,6 +1282,10 @@ app.patch('/api/assets/:id', requireAdmin, (req, res) => {
       });
     }
     
+    console.log('Received updates:', updates);
+    console.log('Received class-specific updates:', classSpecificUpdates);
+    console.log('Asset class:', currentAsset.class);
+    
     if (Object.keys(updates).length === 0 && Object.keys(classSpecificUpdates).length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
     }

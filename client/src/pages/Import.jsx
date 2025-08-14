@@ -90,7 +90,7 @@ function Import() {
 
   return (
     <div className="container">
-      <h2>一括インポート</h2>
+      <h2>インポート・エクスポート</h2>
       
       <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
         <h3>CSVファイルのインポート</h3>

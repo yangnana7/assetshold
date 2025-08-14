@@ -31,6 +31,12 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
             >
               ユーザー管理
             </button>
+            <button
+              className={currentPage === 'duplicates' ? 'active' : ''}
+              onClick={() => onPageChange('duplicates')}
+            >
+              重複統合
+            </button>
           </nav>
         )}
         

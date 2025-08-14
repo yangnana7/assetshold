@@ -8,6 +8,7 @@ import Login from './pages/Login'
 import UserManagement from './pages/UserManagement'
 import Rebalance from './pages/Rebalance'
 import Comps from './pages/Comps'
+import Duplicates from './pages/Duplicates'
 import { useAuth } from './hooks/useAuth'
 
 function App() {
@@ -33,6 +34,8 @@ function App() {
         return user && user.role === 'admin' ? <ImportExport /> : <Dashboard />
       case 'users':
         return user && user.role === 'admin' ? <UserManagement /> : <Dashboard />
+      case 'duplicates':
+        return user && user.role === 'admin' ? <Duplicates /> : <Dashboard />
       case 'rebalance':
         return <Rebalance />
       case 'comps':

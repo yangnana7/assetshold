@@ -14,15 +14,31 @@ function UserManagement() {
   })
 
   useEffect(() => {
+    checkUserAuth()
     loadUsers()
   }, [])
+
+  const checkUserAuth = async () => {
+    try {
+      const response = await axios.get('/api/user', { withCredentials: true })
+      console.log('Current user:', response.data.user)
+      if (response.data.user.role !== 'admin') {
+        setError('Admin access required')
+      }
+    } catch (error) {
+      console.error('Auth check failed:', error)
+      setError('Authentication required')
+    }
+  }
 
   const loadUsers = async () => {
     try {
       const response = await axios.get('/api/users', { withCredentials: true })
       setUsers(response.data)
     } catch (error) {
-      setError('Failed to load users')
+      console.error('Load users error:', error.response)
+      const errorMsg = error.response?.data?.error || 'Failed to load users'
+      setError(`Failed to load users: ${errorMsg}`)
     } finally {
       setLoading(false)
     }

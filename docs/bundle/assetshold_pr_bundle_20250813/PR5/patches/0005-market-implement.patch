@@ -1,5 +1,0 @@
-*** a/providers/index.js
---- b/providers/index.js
-@@
-+exports.Fx = require('./fx/YahooFxProvider');
-+exports.Metal = require('./metal/TanakaProvider');

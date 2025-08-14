@@ -3,9 +3,11 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import Header from './components/Header'
 import Dashboard from './pages/Dashboard'
 import AssetList from './pages/AssetList'
-import Import from './pages/Import'
+import ImportExport from './pages/Import'
 import Login from './pages/Login'
 import UserManagement from './pages/UserManagement'
+import Rebalance from './pages/Rebalance'
+import Comps from './pages/Comps'
 import { useAuth } from './hooks/useAuth'
 
 function App() {
@@ -28,9 +30,13 @@ function App() {
       case 'assets':
         return user && user.role === 'admin' ? <AssetList /> : <Dashboard />
       case 'import':
-        return user && user.role === 'admin' ? <Import /> : <Dashboard />
+        return user && user.role === 'admin' ? <ImportExport /> : <Dashboard />
       case 'users':
         return user && user.role === 'admin' ? <UserManagement /> : <Dashboard />
+      case 'rebalance':
+        return <Rebalance />
+      case 'comps':
+        return <Comps />
       case 'login':
         return <Login onLogin={login} />
       default:

@@ -346,8 +346,12 @@ function Dashboard() {
             <span className="metric-value">{totalAssets}件</span>
           </div>
           <div className="metric">
+            <span>簿価総額:</span>
+            <span className="metric-value">{formatCurrency(classSummary?.items ? classSummary.items.reduce((sum, item) => sum + item.book_total_jpy, 0) : totalValue)}</span>
+          </div>
+          <div className="metric">
             <span>総評価額:</span>
-            <span className="metric-value">{formatCurrency(totalValue)}</span>
+            <span className="metric-value">{formatCurrency(classSummary?.items ? classSummary.items.reduce((sum, item) => sum + item.market_total_jpy, 0) : totalValue)}</span>
           </div>
         </div>
 

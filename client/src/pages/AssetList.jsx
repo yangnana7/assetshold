@@ -11,6 +11,12 @@ function AssetList() {
   const [editingAsset, setEditingAsset] = useState(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [filter, setFilter] = useState('')
+  
+  // Inline editing states
+  const [editingAssetId, setEditingAssetId] = useState(null)
+  const [editForm, setEditForm] = useState({})
+  const [editPreview, setEditPreview] = useState(null)
+  const [isUpdating, setIsUpdating] = useState(false)
 
   useEffect(() => {
     fetchAssets()
@@ -19,7 +25,19 @@ function AssetList() {
   const fetchAssets = async () => {
     try {
       const response = await axios.get('/api/assets', { withCredentials: true })
-      setAssets(response.data)
+      
+      // Fetch detailed information for each asset
+      const assetsWithDetails = await Promise.all(response.data.map(async (asset) => {
+        try {
+          const detailResponse = await axios.get(`/api/assets/${asset.id}`, { withCredentials: true })
+          return detailResponse.data
+        } catch (detailError) {
+          console.warn(`Failed to fetch details for asset ${asset.id}:`, detailError)
+          return asset
+        }
+      }))
+      
+      setAssets(assetsWithDetails)
     } catch (error) {
       setError('資産データの取得に失敗しました')
       console.error('Assets fetch error:', error)
@@ -54,6 +72,285 @@ function AssetList() {
   const handleAssetCreated = (newAsset) => {
     setAssets([newAsset, ...assets])
     setShowCreateModal(false)
+  }
+
+  // Inline editing functions
+  const startInlineEdit = (asset) => {
+    if (!isEditableAsset(asset)) return;
+    
+    setEditingAssetId(asset.id)
+    
+    // Initialize form with current values
+    if (asset.class === 'us_stock' && asset.stock_details) {
+      setEditForm({
+        class: asset.class,
+        quantity: asset.stock_details.quantity,
+        avg_price_usd: asset.stock_details.avg_price_usd || '',
+        recalc: 'auto'
+      })
+    } else if (asset.class === 'jp_stock' && asset.stock_details) {
+      setEditForm({
+        class: asset.class,
+        quantity: asset.stock_details.quantity,
+        avg_price_jpy: asset.stock_details.avg_price_jpy || '',
+        recalc: 'auto'
+      })
+    } else if (asset.class === 'precious_metal' && asset.precious_metal_details) {
+      setEditForm({
+        class: asset.class,
+        weight_g: asset.precious_metal_details.weight_g,
+        unit_book_cost_jpy_per_gram: '',
+        recalc: 'auto'
+      })
+    }
+    
+    setEditPreview(null)
+  }
+
+  const cancelInlineEdit = () => {
+    setEditingAssetId(null)
+    setEditForm({})
+    setEditPreview(null)
+  }
+
+  const handleFormChange = (field, value) => {
+    const newForm = { ...editForm, [field]: value }
+    setEditForm(newForm)
+    
+    // Calculate preview
+    const asset = assets.find(a => a.id === editingAssetId)
+    if (asset) {
+      calculatePreview(asset, newForm)
+    }
+  }
+
+  const calculatePreview = (asset, form) => {
+    try {
+      let newBook = 0
+      const oldBook = asset.book_value_jpy
+
+      if (form.class === 'us_stock' && asset.stock_details) {
+        const oldQty = asset.stock_details.quantity
+        const newQty = Number(form.quantity)
+        
+        if (form.recalc === 'unit' && Number.isFinite(Number(form.avg_price_usd))) {
+          // Unit method - simplified calculation without FX rate
+          const unitBook = oldBook / oldQty
+          newBook = Math.round(unitBook * newQty)
+        } else {
+          // Scale method
+          if (oldQty > 0) {
+            const unitBook = oldBook / oldQty
+            newBook = Math.round(unitBook * newQty)
+          }
+        }
+      } else if (form.class === 'jp_stock' && asset.stock_details) {
+        const oldQty = asset.stock_details.quantity
+        const newQty = Number(form.quantity)
+        
+        if (form.recalc === 'unit' && Number.isFinite(Number(form.avg_price_jpy))) {
+          newBook = Math.round(Number(form.avg_price_jpy) * newQty)
+        } else {
+          // Scale method
+          if (oldQty > 0) {
+            const unitBook = oldBook / oldQty
+            newBook = Math.round(unitBook * newQty)
+          }
+        }
+      } else if (form.class === 'precious_metal' && asset.precious_metal_details) {
+        const oldWeight = asset.precious_metal_details.weight_g
+        const newWeight = Number(form.weight_g)
+        
+        if (form.recalc === 'unit' && Number.isFinite(Number(form.unit_book_cost_jpy_per_gram))) {
+          newBook = Math.round(Number(form.unit_book_cost_jpy_per_gram) * newWeight)
+        } else {
+          // Scale method
+          if (oldWeight > 0) {
+            const unitBook = oldBook / oldWeight
+            newBook = Math.round(unitBook * newWeight)
+          }
+        }
+      }
+
+      setEditPreview({
+        newBook,
+        deltaBook: newBook - oldBook,
+        valid: newBook > 0
+      })
+    } catch (e) {
+      setEditPreview({ valid: false, error: 'Calculation error' })
+    }
+  }
+
+  const saveInlineEdit = async () => {
+    if (!editPreview || !editPreview.valid) return
+
+    setIsUpdating(true)
+    try {
+      const response = await axios.patch(`/api/assets/${editingAssetId}`, editForm, { withCredentials: true })
+      
+      if (response.data.ok) {
+        // Refresh the assets list
+        await fetchAssets()
+        
+        // Close edit mode
+        cancelInlineEdit()
+        
+        alert('資産を更新しました')
+      }
+    } catch (error) {
+      console.error('Update error:', error)
+      alert(`更新エラー: ${error.response?.data?.error || error.message}`)
+    } finally {
+      setIsUpdating(false)
+    }
+  }
+
+  const isEditableAsset = (asset) => {
+    return ['us_stock', 'jp_stock', 'precious_metal'].includes(asset.class)
+  }
+
+  const renderInlineEditForm = (asset) => {
+    if (asset.class === 'us_stock') {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.5rem', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <label style={{ minWidth: '60px' }}>株数:</label>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={editForm.quantity || ''}
+              onChange={(e) => handleFormChange('quantity', parseInt(e.target.value) || 0)}
+              style={{ width: '80px', padding: '0.25rem' }}
+            />
+            <label style={{ minWidth: '80px' }}>単価(USD):</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={editForm.avg_price_usd || ''}
+              onChange={(e) => handleFormChange('avg_price_usd', parseFloat(e.target.value) || '')}
+              style={{ width: '80px', padding: '0.25rem' }}
+              placeholder="任意"
+            />
+          </div>
+          {editPreview && (
+            <div style={{ fontSize: '0.85rem', color: editPreview.valid ? '#28a745' : '#dc3545' }}>
+              新簿価: {formatCurrency(editPreview.newBook)} (差額: {editPreview.deltaBook >= 0 ? '+' : ''}{formatCurrency(editPreview.deltaBook)})
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button 
+              onClick={saveInlineEdit} 
+              disabled={!editPreview || !editPreview.valid || isUpdating}
+              style={{ padding: '0.25rem 0.5rem', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '4px' }}
+            >
+              {isUpdating ? '更新中...' : '保存'}
+            </button>
+            <button 
+              onClick={cancelInlineEdit}
+              style={{ padding: '0.25rem 0.5rem', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px' }}
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      )
+    } else if (asset.class === 'jp_stock') {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.5rem', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <label style={{ minWidth: '60px' }}>株数:</label>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={editForm.quantity || ''}
+              onChange={(e) => handleFormChange('quantity', parseInt(e.target.value) || 0)}
+              style={{ width: '80px', padding: '0.25rem' }}
+            />
+            <label style={{ minWidth: '80px' }}>単価(JPY):</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={editForm.avg_price_jpy || ''}
+              onChange={(e) => handleFormChange('avg_price_jpy', parseFloat(e.target.value) || '')}
+              style={{ width: '80px', padding: '0.25rem' }}
+              placeholder="任意"
+            />
+          </div>
+          {editPreview && (
+            <div style={{ fontSize: '0.85rem', color: editPreview.valid ? '#28a745' : '#dc3545' }}>
+              新簿価: {formatCurrency(editPreview.newBook)} (差額: {editPreview.deltaBook >= 0 ? '+' : ''}{formatCurrency(editPreview.deltaBook)})
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button 
+              onClick={saveInlineEdit} 
+              disabled={!editPreview || !editPreview.valid || isUpdating}
+              style={{ padding: '0.25rem 0.5rem', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '4px' }}
+            >
+              {isUpdating ? '更新中...' : '保存'}
+            </button>
+            <button 
+              onClick={cancelInlineEdit}
+              style={{ padding: '0.25rem 0.5rem', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px' }}
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      )
+    } else if (asset.class === 'precious_metal') {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.5rem', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <label style={{ minWidth: '60px' }}>重量(g):</label>
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={editForm.weight_g || ''}
+              onChange={(e) => handleFormChange('weight_g', parseFloat(e.target.value) || 0)}
+              style={{ width: '80px', padding: '0.25rem' }}
+            />
+            <label style={{ minWidth: '80px' }}>単価/g:</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={editForm.unit_book_cost_jpy_per_gram || ''}
+              onChange={(e) => handleFormChange('unit_book_cost_jpy_per_gram', parseFloat(e.target.value) || '')}
+              style={{ width: '80px', padding: '0.25rem' }}
+              placeholder="任意"
+            />
+          </div>
+          {editPreview && (
+            <div style={{ fontSize: '0.85rem', color: editPreview.valid ? '#28a745' : '#dc3545' }}>
+              新簿価: {formatCurrency(editPreview.newBook)} (差額: {editPreview.deltaBook >= 0 ? '+' : ''}{formatCurrency(editPreview.deltaBook)})
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button 
+              onClick={saveInlineEdit} 
+              disabled={!editPreview || !editPreview.valid || isUpdating}
+              style={{ padding: '0.25rem 0.5rem', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '4px' }}
+            >
+              {isUpdating ? '更新中...' : '保存'}
+            </button>
+            <button 
+              onClick={cancelInlineEdit}
+              style={{ padding: '0.25rem 0.5rem', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px' }}
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return null
   }
 
   const filteredAssets = assets.filter(asset => 
@@ -106,34 +403,53 @@ function AssetList() {
         </thead>
         <tbody>
           {filteredAssets.map(asset => (
-            <tr key={asset.id}>
-              <td>{getAssetClassName(asset.class)}</td>
-              <td>
-                <div>
-                  {formatAssetName(asset.name, asset.note)}
-                  {renderEvaluationDetails(asset)}
-                </div>
-              </td>
-              <td>{formatDate(asset.acquired_at)}</td>
-              <td className="format-number">{formatCurrency(asset.book_value_jpy)}</td>
-              <td className="format-number">{renderEvaluationAmount(asset)}</td>
-              <td>{asset.liquidity_tier}</td>
-              <td>
-                <button 
-                  className="btn"
-                  onClick={() => handleEdit(asset)}
-                  style={{ marginRight: '0.5rem' }}
-                >
-                  編集
-                </button>
-                <button 
-                  className="btn btn-danger"
-                  onClick={() => handleDelete(asset)}
-                >
-                  削除
-                </button>
-              </td>
-            </tr>
+            <React.Fragment key={asset.id}>
+              <tr>
+                <td>{getAssetClassName(asset.class)}</td>
+                <td>
+                  <div>
+                    {formatAssetName(asset.name, asset.note)}
+                    {renderEvaluationDetails(asset)}
+                  </div>
+                </td>
+                <td>{formatDate(asset.acquired_at)}</td>
+                <td className="format-number">{formatCurrency(asset.book_value_jpy)}</td>
+                <td className="format-number">{renderEvaluationAmount(asset)}</td>
+                <td>{asset.liquidity_tier}</td>
+                <td>
+                  {isEditableAsset(asset) && (
+                    <button 
+                      className="btn"
+                      onClick={() => startInlineEdit(asset)}
+                      style={{ marginRight: '0.5rem' }}
+                      disabled={editingAssetId !== null}
+                    >
+                      数量編集
+                    </button>
+                  )}
+                  <button 
+                    className="btn"
+                    onClick={() => handleEdit(asset)}
+                    style={{ marginRight: '0.5rem' }}
+                  >
+                    詳細編集
+                  </button>
+                  <button 
+                    className="btn btn-danger"
+                    onClick={() => handleDelete(asset)}
+                  >
+                    削除
+                  </button>
+                </td>
+              </tr>
+              {editingAssetId === asset.id && (
+                <tr>
+                  <td colSpan="7">
+                    {renderInlineEditForm(asset)}
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
           ))}
         </tbody>
       </table>

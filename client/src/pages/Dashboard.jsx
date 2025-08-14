@@ -25,11 +25,6 @@ function Dashboard() {
   const [classSummary, setClassSummary] = useState(null)
   const [classSummaryLoading, setClassSummaryLoading] = useState(false)
 
-  // Asset editing states
-  const [editingAssetId, setEditingAssetId] = useState(null)
-  const [editForm, setEditForm] = useState({})
-  const [editPreview, setEditPreview] = useState(null)
-  const [isUpdating, setIsUpdating] = useState(false)
 
   useEffect(() => {
     fetchDashboardData()
@@ -104,142 +99,6 @@ function Dashboard() {
     }
   }
 
-  const startEditing = (asset) => {
-    if (!isEditableAsset(asset)) return;
-    
-    setEditingAssetId(asset.id)
-    
-    // Initialize form with current values
-    if (asset.class === 'us_stock' && asset.stock_details) {
-      setEditForm({
-        class: asset.class,
-        quantity: asset.stock_details.quantity,
-        avg_price_usd: asset.stock_details.avg_price_usd || '',
-        recalc: 'auto'
-      })
-    } else if (asset.class === 'jp_stock' && asset.stock_details) {
-      setEditForm({
-        class: asset.class,
-        quantity: asset.stock_details.quantity,
-        avg_price_jpy: asset.stock_details.avg_price_jpy || '',
-        recalc: 'auto'
-      })
-    } else if (asset.class === 'precious_metal' && asset.precious_metal_details) {
-      setEditForm({
-        class: asset.class,
-        weight_g: asset.precious_metal_details.weight_g,
-        unit_book_cost_jpy_per_gram: '',
-        recalc: 'auto'
-      })
-    }
-    
-    setEditPreview(null)
-  }
-
-  const cancelEditing = () => {
-    setEditingAssetId(null)
-    setEditForm({})
-    setEditPreview(null)
-  }
-
-  const handleFormChange = (field, value) => {
-    const newForm = { ...editForm, [field]: value }
-    setEditForm(newForm)
-    
-    // Calculate preview
-    const asset = assets.find(a => a.id === editingAssetId)
-    if (asset) {
-      calculatePreview(asset, newForm)
-    }
-  }
-
-  const calculatePreview = (asset, form) => {
-    try {
-      let newBook = 0
-      const oldBook = asset.book_value_jpy
-
-      if (form.class === 'us_stock' && asset.stock_details) {
-        const oldQty = asset.stock_details.quantity
-        const newQty = Number(form.quantity)
-        
-        if (form.recalc === 'unit' && Number.isFinite(Number(form.avg_price_usd))) {
-          // Unit method - simplified calculation without FX rate
-          const unitBook = oldBook / oldQty
-          newBook = Math.round(unitBook * newQty)
-        } else {
-          // Scale method
-          if (oldQty > 0) {
-            const unitBook = oldBook / oldQty
-            newBook = Math.round(unitBook * newQty)
-          }
-        }
-      } else if (form.class === 'jp_stock' && asset.stock_details) {
-        const oldQty = asset.stock_details.quantity
-        const newQty = Number(form.quantity)
-        
-        if (form.recalc === 'unit' && Number.isFinite(Number(form.avg_price_jpy))) {
-          newBook = Math.round(Number(form.avg_price_jpy) * newQty)
-        } else {
-          // Scale method
-          if (oldQty > 0) {
-            const unitBook = oldBook / oldQty
-            newBook = Math.round(unitBook * newQty)
-          }
-        }
-      } else if (form.class === 'precious_metal' && asset.precious_metal_details) {
-        const oldWeight = asset.precious_metal_details.weight_g
-        const newWeight = Number(form.weight_g)
-        
-        if (form.recalc === 'unit' && Number.isFinite(Number(form.unit_book_cost_jpy_per_gram))) {
-          newBook = Math.round(Number(form.unit_book_cost_jpy_per_gram) * newWeight)
-        } else {
-          // Scale method
-          if (oldWeight > 0) {
-            const unitBook = oldBook / oldWeight
-            newBook = Math.round(unitBook * newWeight)
-          }
-        }
-      }
-
-      setEditPreview({
-        newBook,
-        deltaBook: newBook - oldBook,
-        valid: newBook > 0
-      })
-    } catch (e) {
-      setEditPreview({ valid: false, error: 'Calculation error' })
-    }
-  }
-
-  const saveEdit = async () => {
-    if (!editPreview || !editPreview.valid) return
-
-    setIsUpdating(true)
-    try {
-      const response = await axios.patch(`/api/assets/${editingAssetId}`, editForm)
-      
-      if (response.data.ok) {
-        // Refresh the assets list
-        await fetchAssets(currentPage)
-        await fetchDashboardData()
-        await fetchClassSummary()
-        
-        // Close edit mode
-        cancelEditing()
-        
-        alert('資産を更新しました')
-      }
-    } catch (error) {
-      console.error('Update error:', error)
-      alert(`更新エラー: ${error.response?.data?.error || error.message}`)
-    } finally {
-      setIsUpdating(false)
-    }
-  }
-
-  const isEditableAsset = (asset) => {
-    return ['us_stock', 'jp_stock', 'precious_metal'].includes(asset.class)
-  }
 
   const refreshAllMarketData = async () => {
     try {
@@ -382,124 +241,6 @@ function Dashboard() {
     return pages
   }
 
-  const renderEditForm = (asset) => {
-    if (asset.class === 'us_stock') {
-      return (
-        <div className="edit-form-fields">
-          <div className="field-group">
-            <label>株数:</label>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={editForm.quantity || ''}
-              onChange={(e) => handleFormChange('quantity', parseInt(e.target.value) || 0)}
-              placeholder="株数を入力"
-            />
-          </div>
-          <div className="field-group">
-            <label>平均取得単価 (USD) (任意):</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={editForm.avg_price_usd || ''}
-              onChange={(e) => handleFormChange('avg_price_usd', parseFloat(e.target.value) || '')}
-              placeholder="単価を入力"
-            />
-          </div>
-          <div className="field-group">
-            <label>再計算方法:</label>
-            <select
-              value={editForm.recalc || 'auto'}
-              onChange={(e) => handleFormChange('recalc', e.target.value)}
-            >
-              <option value="auto">自動</option>
-              <option value="scale">比例</option>
-              <option value="unit">単価</option>
-            </select>
-          </div>
-        </div>
-      )
-    } else if (asset.class === 'jp_stock') {
-      return (
-        <div className="edit-form-fields">
-          <div className="field-group">
-            <label>株数:</label>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={editForm.quantity || ''}
-              onChange={(e) => handleFormChange('quantity', parseInt(e.target.value) || 0)}
-              placeholder="株数を入力"
-            />
-          </div>
-          <div className="field-group">
-            <label>平均取得単価 (JPY) (任意):</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={editForm.avg_price_jpy || ''}
-              onChange={(e) => handleFormChange('avg_price_jpy', parseFloat(e.target.value) || '')}
-              placeholder="単価を入力"
-            />
-          </div>
-          <div className="field-group">
-            <label>再計算方法:</label>
-            <select
-              value={editForm.recalc || 'auto'}
-              onChange={(e) => handleFormChange('recalc', e.target.value)}
-            >
-              <option value="auto">自動</option>
-              <option value="scale">比例</option>
-              <option value="unit">単価</option>
-            </select>
-          </div>
-        </div>
-      )
-    } else if (asset.class === 'precious_metal') {
-      return (
-        <div className="edit-form-fields">
-          <div className="field-group">
-            <label>重量 (g):</label>
-            <input
-              type="number"
-              min="0.1"
-              step="0.1"
-              value={editForm.weight_g || ''}
-              onChange={(e) => handleFormChange('weight_g', parseFloat(e.target.value) || 0)}
-              placeholder="重量を入力"
-            />
-          </div>
-          <div className="field-group">
-            <label>単価 (JPY/g) (任意):</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={editForm.unit_book_cost_jpy_per_gram || ''}
-              onChange={(e) => handleFormChange('unit_book_cost_jpy_per_gram', parseFloat(e.target.value) || '')}
-              placeholder="単価を入力"
-            />
-          </div>
-          <div className="field-group">
-            <label>再計算方法:</label>
-            <select
-              value={editForm.recalc || 'auto'}
-              onChange={(e) => handleFormChange('recalc', e.target.value)}
-            >
-              <option value="auto">自動</option>
-              <option value="scale">比例</option>
-              <option value="unit">単価</option>
-            </select>
-          </div>
-        </div>
-      )
-    }
-    return null
-  }
 
   const renderAssetDetails = (asset) => {
     if (asset.class === 'us_stock' && asset.stock_details) {
@@ -878,72 +619,23 @@ function Dashboard() {
                     </div>
                   </div>
                   <div className="asset-card-right">
-                    {editingAssetId === asset.id ? (
-                      // Edit mode
-                      <div className="asset-edit-form">
-                        <div className="edit-form-header">
-                          <h4>数量/重量編集</h4>
-                          <button onClick={cancelEditing} className="cancel-btn">✕</button>
-                        </div>
-                        
-                        {renderEditForm(asset)}
-                        
-                        {editPreview && (
-                          <div className="edit-preview">
-                            <div className="preview-item">
-                              <span>新簿価:</span>
-                              <span className="preview-value">{formatCurrency(editPreview.newBook)}</span>
-                            </div>
-                            <div className="preview-item">
-                              <span>差額:</span>
-                              <span className={`preview-value ${editPreview.deltaBook >= 0 ? 'positive' : 'negative'}`}>
-                                {editPreview.deltaBook >= 0 ? '+' : ''}{formatCurrency(editPreview.deltaBook)}
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                        
-                        <div className="edit-actions">
-                          <button 
-                            onClick={saveEdit} 
-                            disabled={!editPreview || !editPreview.valid || isUpdating}
-                            className="save-btn"
-                          >
-                            {isUpdating ? '更新中...' : '保存'}
-                          </button>
-                        </div>
+                    <div className="asset-current-value-label">
+                      評価額：
+                    </div>
+                    <div className={`asset-current-value ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
+                      {formatCurrency(asset.current_value_jpy || asset.book_value_jpy)}
+                    </div>
+                    <div className="asset-book-value">
+                      簿価: {formatCurrency(asset.book_value_jpy)}
+                    </div>
+                    <div className={`asset-gain-loss ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
+                      <div>{formatCurrency(asset.gain_loss_jpy || 0)}</div>
+                      <div className="percentage">({asset.gain_loss_percentage || '0.00'}%)</div>
+                    </div>
+                    {(asset.class === 'us_stock' || asset.class === 'jp_stock' || asset.class === 'precious_metal') && getMarketUnitPrice(asset) && (
+                      <div className="asset-unit-price">
+                        時価：{getMarketUnitPrice(asset)}
                       </div>
-                    ) : (
-                      // Normal display mode
-                      <>
-                        <div className="asset-current-value-label">
-                          評価額：
-                        </div>
-                        <div className={`asset-current-value ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
-                          {formatCurrency(asset.current_value_jpy || asset.book_value_jpy)}
-                        </div>
-                        <div className="asset-book-value">
-                          簿価: {formatCurrency(asset.book_value_jpy)}
-                        </div>
-                        <div className={`asset-gain-loss ${(asset.gain_loss_jpy || 0) >= 0 ? 'positive' : 'negative'}`}>
-                          <div>{formatCurrency(asset.gain_loss_jpy || 0)}</div>
-                          <div className="percentage">({asset.gain_loss_percentage || '0.00'}%)</div>
-                        </div>
-                        {(asset.class === 'us_stock' || asset.class === 'jp_stock' || asset.class === 'precious_metal') && getMarketUnitPrice(asset) && (
-                          <div className="asset-unit-price">
-                            時価：{getMarketUnitPrice(asset)}
-                          </div>
-                        )}
-                        {isEditableAsset(asset) && (
-                          <button 
-                            onClick={() => startEditing(asset)} 
-                            className="edit-btn"
-                            disabled={editingAssetId !== null}
-                          >
-                            編集
-                          </button>
-                        )}
-                      </>
                     )}
                   </div>
                 </div>

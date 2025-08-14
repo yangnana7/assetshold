@@ -1257,6 +1257,8 @@ app.post('/api/assets', requireAdmin, (req, res) => {
 
 app.patch('/api/assets/:id', requireAdmin, (req, res) => {
   const assetId = parseInt(req.params.id);
+  
+  
   const {
     class: assetClass,
     quantity,
@@ -1278,6 +1280,7 @@ app.patch('/api/assets/:id', requireAdmin, (req, res) => {
 
   // Check if this is a quantity/weight edit request
   const isQuantityEdit = assetClass && (quantity !== undefined || weight_g !== undefined);
+  
 
   if (isQuantityEdit) {
     // New quantity/weight editing logic

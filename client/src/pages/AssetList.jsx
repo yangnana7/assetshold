@@ -187,6 +187,7 @@ function AssetList() {
 
     setIsUpdating(true)
     try {
+      
       const response = await axios.patch(`/api/assets/${editingAssetId}`, editForm, { withCredentials: true })
       
       if (response.data.ok) {

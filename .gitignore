@@ -11,8 +11,9 @@ data/portfolio.db-wal
 data/*.csv
 *.csv
 
-# CSV working directory
+# CSV working directory (but not server/csv)
 csv/
+!server/csv/
 
 # Backup files
 backup/

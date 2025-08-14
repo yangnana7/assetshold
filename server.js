@@ -659,6 +659,48 @@ app.get('/api/dashboard', (req, res) => {
   });
 });
 
+// Dashboard class summary route - book value vs market value comparison by asset class
+app.get('/api/dashboard/class-summary', (req, res) => {
+  const query = `
+    SELECT
+      a.class AS class,
+      SUM(a.book_value_jpy) AS book_total_jpy,
+      SUM(
+        COALESCE(
+          (SELECT v.value_jpy
+           FROM valuations v
+           WHERE v.asset_id = a.id
+           ORDER BY v.as_of DESC, v.id DESC
+           LIMIT 1),
+          a.book_value_jpy
+        )
+      ) AS market_total_jpy,
+      COUNT(*) AS count_assets
+    FROM assets a
+    GROUP BY a.class
+    ORDER BY book_total_jpy DESC
+  `;
+
+  db.all(query, (err, rows) => {
+    if (err) {
+      console.error('Class summary query error:', err);
+      return res.status(500).json({ error: 'データベースクエリエラー' });
+    }
+
+    const response = {
+      as_of: new Date().toISOString(),
+      items: rows.map(row => ({
+        class: row.class,
+        book_total_jpy: Math.round(row.book_total_jpy || 0),
+        market_total_jpy: Math.round(row.market_total_jpy || 0),
+        count: row.count_assets || 0
+      }))
+    };
+
+    res.json(response);
+  });
+});
+
 // User management routes (admin only)
 app.get('/api/users', requireAdmin, (req, res) => {
   db.all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC', (err, rows) => {

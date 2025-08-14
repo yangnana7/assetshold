@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 import { formatCurrency, formatAssetName } from '../utils/format'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar } from 'recharts'
 
 function Dashboard() {
   const [dashboardData, setDashboardData] = useState(null)
@@ -21,10 +21,15 @@ function Dashboard() {
   const [marketStatus, setMarketStatus] = useState(null)
   const [marketLoading, setMarketLoading] = useState(false)
 
+  // Class summary states
+  const [classSummary, setClassSummary] = useState(null)
+  const [classSummaryLoading, setClassSummaryLoading] = useState(false)
+
   useEffect(() => {
     fetchDashboardData()
     fetchAssets(1)
     fetchMarketStatus()
+    fetchClassSummary()
   }, [])
 
   useEffect(() => {
@@ -81,6 +86,18 @@ function Dashboard() {
     }
   }
 
+  const fetchClassSummary = async () => {
+    try {
+      setClassSummaryLoading(true)
+      const response = await axios.get('/api/dashboard/class-summary')
+      setClassSummary(response.data)
+    } catch (error) {
+      console.error('Class summary fetch error:', error)
+    } finally {
+      setClassSummaryLoading(false)
+    }
+  }
+
 
   const refreshAllMarketData = async () => {
     try {
@@ -94,6 +111,7 @@ function Dashboard() {
       // Refresh the assets list and dashboard data
       await fetchAssets(currentPage)
       await fetchDashboardData()
+      await fetchClassSummary()
     } catch (error) {
       console.error('Bulk valuation refresh error:', error)
       // Handle different error codes
@@ -424,6 +442,123 @@ function Dashboard() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            </div>
+          ) : (
+            <p>データがありません</p>
+          )}
+        </div>
+      </div>
+
+      {/* Class Summary Section - Book vs Market Value Comparison */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(500px, 1fr))', gap: '2rem', marginTop: '2rem' }}>
+        {/* Bar Chart for Book vs Market Value by Asset Class */}
+        <div className="card">
+          <h3>アセットクラス別：簿価 vs 時価</h3>
+          {classSummaryLoading ? (
+            <div className="loading">読み込み中...</div>
+          ) : classSummary && classSummary.items.length > 0 ? (
+            <div style={{ width: '100%', height: '350px' }}>
+              <ResponsiveContainer>
+                <BarChart data={classSummary.items.map(item => ({
+                  class: getAssetClassName(item.class),
+                  簿価: item.book_total_jpy,
+                  時価: item.market_total_jpy
+                }))}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="class" 
+                    tick={{ fontSize: 12 }}
+                    angle={-45}
+                    textAnchor="end"
+                    height={80}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={(value) => `¥${(value / 1000000).toFixed(1)}M`}
+                  />
+                  <Tooltip 
+                    formatter={(value, name) => [formatCurrency(value), name]}
+                    labelFormatter={(label) => `${label}`}
+                  />
+                  <Legend />
+                  <Bar dataKey="簿価" fill="#8884d8" />
+                  <Bar dataKey="時価" fill="#82ca9d" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p>データがありません</p>
+          )}
+        </div>
+
+        {/* Comparison Table */}
+        <div className="card">
+          <h3>アセットクラス別比較表</h3>
+          {classSummaryLoading ? (
+            <div className="loading">読み込み中...</div>
+          ) : classSummary && classSummary.items.length > 0 ? (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa', borderBottom: '2px solid #dee2e6' }}>
+                    <th style={{ padding: '8px', textAlign: 'left', border: '1px solid #dee2e6' }}>クラス</th>
+                    <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>点数</th>
+                    <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>簿価合計</th>
+                    <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>時価合計</th>
+                    <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>乖離</th>
+                    <th style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>乖離率(%)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {classSummary.items.map((item, index) => {
+                    const deviation = item.market_total_jpy - item.book_total_jpy;
+                    const deviationRate = item.book_total_jpy > 0 
+                      ? ((deviation / item.book_total_jpy) * 100).toFixed(1) 
+                      : '0.0';
+                    const isPositive = deviation >= 0;
+                    
+                    return (
+                      <tr key={item.class} style={{ 
+                        backgroundColor: index % 2 === 0 ? '#fff' : '#f8f9fa',
+                        borderBottom: '1px solid #dee2e6'
+                      }}>
+                        <td style={{ padding: '8px', border: '1px solid #dee2e6' }}>
+                          <span className={`asset-class-badge class-${item.class}`}>
+                            {getAssetClassName(item.class)}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>
+                          {item.count.toLocaleString()}件
+                        </td>
+                        <td style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>
+                          {formatCurrency(item.book_total_jpy)}
+                        </td>
+                        <td style={{ padding: '8px', textAlign: 'right', border: '1px solid #dee2e6' }}>
+                          {formatCurrency(item.market_total_jpy)}
+                        </td>
+                        <td style={{ 
+                          padding: '8px', 
+                          textAlign: 'right', 
+                          border: '1px solid #dee2e6',
+                          color: isPositive ? '#28a745' : '#dc3545',
+                          fontWeight: 'bold'
+                        }}>
+                          {formatCurrency(deviation)}
+                        </td>
+                        <td style={{ 
+                          padding: '8px', 
+                          textAlign: 'right', 
+                          border: '1px solid #dee2e6',
+                          color: isPositive ? '#28a745' : '#dc3545',
+                          fontWeight: 'bold'
+                        }}>
+                          {isPositive ? '+' : ''}{deviationRate}%
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           ) : (
             <p>データがありません</p>

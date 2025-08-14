@@ -23,7 +23,7 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
               className={currentPage === 'import' ? 'active' : ''}
               onClick={() => onPageChange('import')}
             >
-              一括インポート
+              インポート・エクスポート
             </button>
             <button
               className={currentPage === 'users' ? 'active' : ''}

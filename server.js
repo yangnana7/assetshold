@@ -78,19 +78,20 @@ if (!SESSION_SECRET) {
 }
 
 // Helmet disabled to prevent HTTPS redirect issues on Ubuntu deployment
-// app.use(helmet({
-//   crossOriginOpenerPolicy: false,
-//   originAgentCluster: false,
-//   contentSecurityPolicy: {
-//     directives: {
-//       defaultSrc: ["'self'"],
-//       styleSrc: ["'self'", "'unsafe-inline'"],
-//       scriptSrc: ["'self'"],
-//       imgSrc: ["'self'", "data:"],
-//       fontSrc: ["'self'"],
-//     }
-//   }
-// }));
+// Security middleware - Helmet with appropriate CSP
+app.use(helmet({
+  crossOriginOpenerPolicy: false,
+  originAgentCluster: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:"],
+      fontSrc: ["'self'"],
+    }
+  }
+}));
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,
@@ -429,17 +430,18 @@ function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // Create default admin user if not exists
-    db.get("SELECT id FROM users WHERE username = 'admin'", (err, row) => {
-      if (!row) {
-        bcrypt.hash('admin', 10, (err, hash) => {
-          if (!err) {
-            db.run("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", 
-              ['admin', hash, 'admin']);
-          }
-        });
-      }
-    });
+    // SECURITY: Default admin user creation disabled for security
+    // Create admin user manually or through proper setup process
+    // db.get("SELECT id FROM users WHERE username = 'admin'", (err, row) => {
+    //   if (!row) {
+    //     bcrypt.hash('admin', 10, (err, hash) => {
+    //       if (!err) {
+    //         db.run("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", 
+    //           ['admin', hash, 'admin']);
+    //       }
+    //     });
+    //   }
+    // });
   });
 }
 

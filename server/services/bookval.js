@@ -3,14 +3,9 @@
  * Handles recalculation of book values when quantities/weights change
  */
 
-/**
- * Floor to 2 decimal places then round to integer yen
- * @param {number} x - The value to round
- * @returns {number} - Rounded integer value
- */
-function floor2(x) {
-  return Math.round(Math.floor(x * 100) / 100);
-}
+const { intYenFloorFrom2Decimals } = require('../utils/number');
+
+function floor2(x) { return intYenFloorFrom2Decimals(x); }
 
 /**
  * Recalculate book value based on strategy

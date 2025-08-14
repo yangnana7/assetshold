@@ -38,7 +38,7 @@ class NoopProvider extends StockProvider {
   }
 
   async getQuote(ticker, exchange) {
-    throw new Error('Market data is disabled (MARKET_ENABLE=0)');
+    throw new MarketDisabledError('Market data is disabled (MARKET_ENABLE=0)');
   }
 }
 
@@ -48,7 +48,21 @@ class NoopFxProvider extends FxProvider {
   }
 
   async getRate(pair) {
-    throw new Error('Market data is disabled (MARKET_ENABLE=0)');
+    throw new MarketDisabledError('Market data is disabled (MARKET_ENABLE=0)');
+  }
+}
+
+class UpstreamUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'UpstreamUnavailableError';
+  }
+}
+
+class MarketDisabledError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'MarketDisabledError';
   }
 }
 
@@ -57,5 +71,7 @@ module.exports = {
   StockProvider,
   FxProvider,
   NoopProvider,
-  NoopFxProvider
+  NoopFxProvider,
+  UpstreamUnavailableError,
+  MarketDisabledError
 };

@@ -976,8 +976,8 @@ app.get('/api/assets', (req, res) => {
               };
               
               // Include market_price_usd for US stocks
-              if (asset.class === 'us_stock' && details.market_price_usd) {
-                asset.stock_details.market_price_usd = details.market_price_usd;
+              if (asset.class === 'us_stock') {
+                asset.stock_details.market_price_usd = details.market_price_usd || null;
               }
             }
             

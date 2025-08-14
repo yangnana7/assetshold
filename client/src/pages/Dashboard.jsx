@@ -767,6 +767,7 @@ function getUSDUnitPrice(asset, usdJpyRate) {
   // Use direct USD market price from Google Finance for US stocks
   if (asset.class === 'us_stock' && asset.stock_details) {
     const { market_price_usd } = asset.stock_details
+    
     if (market_price_usd && market_price_usd > 0) {
       return `$${market_price_usd.toFixed(2)} /株`
     }

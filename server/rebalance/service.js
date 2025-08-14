@@ -1,10 +1,6 @@
-const sqlite3 = require('sqlite3').verbose();
+const { dbAll, dbGet, dbRun } = require('../utils/db');
 
 const DEFAULT_CLASSES = ['us_stock','jp_stock','precious_metal','watch','collection','real_estate','cash'];
-
-function dbAll(db, sql, params=[]) { return new Promise((ok, ng)=> db.all(sql, params, (e, rows)=> e?ng(e):ok(rows))); }
-function dbGet(db, sql, params=[]) { return new Promise((ok, ng)=> db.get(sql, params, (e, row)=> e?ng(e):ok(row))); }
-function dbRun(db, sql, params=[]) { return new Promise((ok, ng)=> db.run(sql, params, function(e){ e?ng(e):ok(this)})); }
 
 async function getTolerancePct(db) {
   const row = await dbGet(db, `SELECT value FROM settings WHERE key='tolerance_pct'`);

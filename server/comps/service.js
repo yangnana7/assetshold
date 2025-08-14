@@ -1,21 +1,5 @@
-const sqlite3 = require('sqlite3').verbose();
-
-function dbAll(db, sql, params=[]) { return new Promise((ok, ng)=> db.all(sql, params, (e, rows)=> e?ng(e):ok(rows))); }
-function dbGet(db, sql, params=[]) { return new Promise((ok, ng)=> db.get(sql, params, (e, row)=> e?ng(e):ok(row))); }
-function dbRun(db, sql, params=[]) { return new Promise((ok, ng)=> db.run(sql, params, function(e){ e?ng(e):ok(this)})); }
-
-async function getFxFromCacheJPY(db, currency) {
-  if (!currency || currency.toUpperCase() === 'JPY') return 1;
-  const pair = (currency.toUpperCase() + 'JPY');
-  const row = await dbGet(db, `SELECT payload FROM price_cache WHERE key=? ORDER BY fetched_at DESC LIMIT 1`, ['fx:'+pair]);
-  if (!row) return null;
-  try {
-    const js = JSON.parse(row.payload);
-    const price = js.price || js.rate || js.value;
-    if (typeof price === 'number' && price>0) return price;
-  } catch(e) {}
-  return null;
-}
+const { dbAll, dbGet, dbRun } = require('../utils/db');
+const { getFxFromCacheJPY } = require('../utils/cache');
 
 function parseISO(s) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s||'')) throw new Error('sale_date must be YYYY-MM-DD');

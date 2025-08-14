@@ -13,19 +13,16 @@ const csv = require('csv-parser');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const multer = require('multer');
 const { recalcBookValue } = require('./server/services/bookval');
+const { round2Floor } = require('./server/utils/number');
+const { fxKey, stockKey, metalKey } = require('./server/utils/keys');
+const { REQUIRED_PORT, validateRequiredPortOrExit, isMarketEnabled, getSessionSecretOrExit, CACHE_TTL } = require('./server/utils/config');
+const { MarketDisabledError } = require('./providers/base');
 
 // MANDATORY PORT CHECK - Must fail if not port 3009
-const REQUIRED_PORT = 3009;
-const port = process.env.PORT || REQUIRED_PORT;
-
-if (parseInt(port) !== REQUIRED_PORT) {
-  console.error(`ERROR: This application MUST run on port ${REQUIRED_PORT}. Attempted port: ${port}`);
-  console.error('Portfolio app requires fixed port 3009 for proper operation.');
-  process.exit(1);
-}
+const port = validateRequiredPortOrExit();
 
 // Market data configuration
-const MARKET_ENABLE = process.env.MARKET_ENABLE === '1';
+const MARKET_ENABLE = isMarketEnabled();
 console.log(`Market data: ${MARKET_ENABLE ? 'enabled' : 'disabled'}`);
 
 if (!MARKET_ENABLE) {
@@ -72,11 +69,7 @@ app.use(cors({
   credentials: true
 }));
 
-const SESSION_SECRET = process.env.SESSION_SECRET;
-if (!SESSION_SECRET) { 
-  console.error('SESSION_SECRET is required'); 
-  process.exit(1); 
-}
+const SESSION_SECRET = getSessionSecretOrExit();
 
 // Helmet disabled to prevent HTTPS redirect issues on Ubuntu deployment
 // app.use(helmet({
@@ -119,92 +112,10 @@ const preciousMetalProvider = makePreciousMetalProvider(MARKET_ENABLE);
 const duplicateService = new DuplicateDetectionService(db);
 
 // Cache strategy implementation (BDD requirement 4.4)
-const CACHE_TTL = {
-  stock: 15 * 60 * 1000,  // 15 minutes
-  fx: 5 * 60 * 1000       // 5 minutes
-};
 
-// In-memory lock for concurrent request aggregation
-const fetchLocks = new Map();
-
-async function getCachedPrice(key, ttl) {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT * FROM price_cache WHERE key = ?', [key], (err, row) => {
-      if (err) return reject(err);
-      
-      if (!row) return resolve(null);
-      
-      const fetchedAt = new Date(row.fetched_at);
-      const now = new Date();
-      const isExpired = (now - fetchedAt) > ttl;
-      
-      resolve({
-        data: JSON.parse(row.payload),
-        stale: isExpired,
-        fetchedAt: fetchedAt
-      });
-    });
-  });
-}
-
-function setCachedPrice(key, payload) {
-  const fetchedAt = new Date().toISOString();
-  const payloadJson = JSON.stringify(payload);
-  
-  db.run(
-    'INSERT OR REPLACE INTO price_cache (key, payload, fetched_at) VALUES (?, ?, ?)',
-    [key, payloadJson, fetchedAt],
-    (err) => {
-      if (err) {
-        console.error('Failed to cache price data:', err);
-      }
-    }
-  );
-}
-
-async function fetchWithCache(key, ttl, fetchFn) {
-  // Check for concurrent request lock
-  if (fetchLocks.has(key)) {
-    return fetchLocks.get(key);
-  }
-
-  try {
-    // Check cache first
-    const cached = await getCachedPrice(key, ttl);
-    
-    if (cached && !cached.stale) {
-      return { ...cached.data, stale: false };
-    }
-
-    // Create fetch promise and add to locks
-    const fetchPromise = (async () => {
-      try {
-        const data = await fetchFn();
-        setCachedPrice(key, data);
-        return { ...data, stale: false };
-      } catch (error) {
-        // If fetch fails and we have cached data, return it as stale
-        if (cached) {
-          console.log(`Using stale cache for ${key}:`, error.message);
-          return { ...cached.data, stale: true };
-        }
-        throw error;
-      }
-    })();
-
-    fetchLocks.set(key, fetchPromise);
-    
-    try {
-      const result = await fetchPromise;
-      return result;
-    } finally {
-      fetchLocks.delete(key);
-    }
-  } catch (error) {
-    fetchLocks.delete(key);
-    throw error;
-  }
-}
+// Centralized cache helpers (DRY)
+const { createCache } = require('./server/utils/cache');
+const { getCachedPrice, setCachedPrice, fetchWithCache } = createCache(db);
 
 // Function to calculate current market value for assets
 function calculateCurrentValue(asset) {
@@ -237,7 +148,7 @@ async function calculateMarketValue(asset) {
   try {
     if (assetClass === 'us_stock' && asset.stock_details) {
       const { ticker, quantity } = asset.stock_details;
-      const key = `stock:US:${ticker}`;
+      const key = stockKey('US', ticker);
       
       // Get USD price
       const priceData = await fetchWithCache(key, CACHE_TTL.stock, 
@@ -245,12 +156,12 @@ async function calculateMarketValue(asset) {
       );
       
       // Get USDJPY rate
-      const fxKey = 'fx:USDJPY';
-      const fxData = await fetchWithCache(fxKey, CACHE_TTL.fx,
+      const fxKeyStr = fxKey('USDJPY');
+      const fxData = await fetchWithCache(fxKeyStr, CACHE_TTL.fx,
         () => fxProvider.getRate('USDJPY')
       );
       
-      const valueJpy = roundDown2(priceData.price * quantity * fxData.price);
+      const valueJpy = round2Floor(priceData.price * quantity * fxData.price);
       const fxContext = `USDJPY@${fxData.price}(${fxData.asOf})`;
       
       // Update us_stocks table with current market price in USD
@@ -280,13 +191,13 @@ async function calculateMarketValue(asset) {
     
     if (assetClass === 'jp_stock' && asset.stock_details) {
       const { code, quantity } = asset.stock_details;
-      const key = `stock:JP:${code}`;
+      const key = stockKey('JP', code);
       
       const priceData = await fetchWithCache(key, CACHE_TTL.stock,
         () => stockProvider.getQuote(code, 'JP')
       );
       
-      const valueJpy = roundDown2(priceData.price * quantity);
+      const valueJpy = round2Floor(priceData.price * quantity);
       
       return {
         value_jpy: Math.floor(valueJpy),
@@ -298,7 +209,7 @@ async function calculateMarketValue(asset) {
     
     if (assetClass === 'precious_metal' && asset.precious_metal_details) {
       const { metal, weight_g, purity } = asset.precious_metal_details;
-      const key = `precious_metal:${metal}`;
+      const key = metalKey(metal);
       
       const priceData = await fetchWithCache(key, CACHE_TTL.stock,
         () => preciousMetalProvider.getQuote(metal, 'JP')
@@ -309,7 +220,7 @@ async function calculateMarketValue(asset) {
       const purityAdjustedPrice = priceData.price * purity;
       
       // Calculate total value: adjusted price per gram * weight in grams
-      const valueJpy = roundDown2(purityAdjustedPrice * weight_g);
+      const valueJpy = round2Floor(purityAdjustedPrice * weight_g);
       
       return {
         value_jpy: Math.floor(valueJpy),
@@ -324,7 +235,7 @@ async function calculateMarketValue(asset) {
     throw new Error(`Market valuation not supported for asset class: ${assetClass}`);
     
   } catch (error) {
-    if (error.message.includes('Market data is disabled')) {
+    if (error instanceof MarketDisabledError) {
       throw { code: 'market_disabled', message: 'Market data fetching is disabled' };
     }
     throw { code: 'upstream_unavailable', message: error.message };

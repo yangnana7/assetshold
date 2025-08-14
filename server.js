@@ -1256,49 +1256,151 @@ app.post('/api/assets', requireAdmin, (req, res) => {
 });
 
 app.patch('/api/assets/:id', requireAdmin, (req, res) => {
-  const assetId = req.params.id;
-  
-  // Get current values for audit
-  db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, currentAsset) => {
-    if (err || !currentAsset) {
-      return res.status(404).json({ error: 'Asset not found' });
+  const assetId = parseInt(req.params.id);
+  const {
+    class: assetClass,
+    quantity,
+    avg_price_usd,
+    avg_price_jpy,
+    weight_g,
+    unit_book_cost_jpy_per_gram,
+    recalc = 'auto',
+    refresh_market = true,
+    // Legacy fields for existing functionality
+    name,
+    note,
+    acquired_at,
+    book_value_jpy,
+    valuation_source,
+    liquidity_tier,
+    tags
+  } = req.body;
+
+  // Check if this is a quantity/weight edit request
+  const isQuantityEdit = assetClass && (quantity !== undefined || weight_g !== undefined);
+
+  if (isQuantityEdit) {
+    // New quantity/weight editing logic
+    if (!assetClass) {
+      return res.status(400).json({ error: 'Asset class is required' });
     }
-    
-    const updates = {};
-    const allowedFields = ['name', 'note', 'acquired_at', 'book_value_jpy', 'valuation_source', 'liquidity_tier', 'tags'];
-    
-    allowedFields.forEach(field => {
-      if (req.body.hasOwnProperty(field)) {
-        updates[field] = req.body[field];
-      }
+
+    // Start immediate transaction
+    db.serialize(() => {
+      db.run('BEGIN IMMEDIATE', (err) => {
+        if (err) {
+          return res.status(500).json({ error: 'Failed to start transaction' });
+        }
+
+        // Get current asset data
+        db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, asset) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return res.status(500).json({ error: err.message });
+          }
+          if (!asset) {
+            db.run('ROLLBACK');
+            return res.status(404).json({ error: 'Asset not found' });
+          }
+          if (asset.class !== assetClass) {
+            db.run('ROLLBACK');
+            return res.status(400).json({ error: 'Asset class mismatch' });
+          }
+
+          // Update class-specific data
+          updateClassSpecificData(asset, assetId, req.body, (err) => {
+            if (err) {
+              db.run('ROLLBACK');
+              return res.status(400).json({ error: err.message });
+            }
+
+            // Recalculate book value
+            const recalcOptions = {
+              class: assetClass,
+              recalc,
+              newQuantity: quantity,
+              newWeight: weight_g,
+              avgPriceUsd: avg_price_usd,
+              avgPriceJpy: avg_price_jpy,
+              unitBookCostJpyPerGram: unit_book_cost_jpy_per_gram
+            };
+
+            recalcBookValue(db, assetId, recalcOptions)
+              .then(newBookValue => {
+                // Update asset book value
+                db.run('UPDATE assets SET book_value_jpy = ?, updated_at = ? WHERE id = ?',
+                  [newBookValue, new Date().toISOString(), assetId], (err) => {
+                    if (err) {
+                      db.run('ROLLBACK');
+                      return res.status(500).json({ error: err.message });
+                    }
+
+                    // Commit transaction
+                    db.run('COMMIT', (err) => {
+                      if (err) {
+                        return res.status(500).json({ error: 'Failed to commit transaction' });
+                      }
+
+                      // Return updated asset
+                      const updatedAsset = { ...asset, book_value_jpy: newBookValue };
+                      res.json({
+                        ok: true,
+                        asset: updatedAsset
+                      });
+                    });
+                  });
+              })
+              .catch(err => {
+                db.run('ROLLBACK');
+                res.status(400).json({ error: err.message });
+              });
+          });
+        });
+      });
     });
-    
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'No valid fields to update' });
-    }
-    
-    // Special handling for note field - ensure empty string not null
-    if (updates.hasOwnProperty('note') && !updates.note) {
-      updates.note = "";
-    }
-    
-    updates.updated_at = new Date().toISOString();
-    
-    const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
-    const values = Object.values(updates);
-    values.push(assetId);
-    
-    db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+  } else {
+    // Legacy asset field editing logic
+    db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, currentAsset) => {
+      if (err || !currentAsset) {
+        return res.status(404).json({ error: 'Asset not found' });
       }
       
-      const updatedAsset = { ...currentAsset, ...updates, id: parseInt(assetId) };
-      logAudit('assets', assetId, 'UPDATE', currentAsset, updatedAsset, req.session.user.id);
+      const updates = {};
+      const allowedFields = ['name', 'note', 'acquired_at', 'book_value_jpy', 'valuation_source', 'liquidity_tier', 'tags'];
       
-      res.json(updatedAsset);
+      allowedFields.forEach(field => {
+        if (req.body.hasOwnProperty(field)) {
+          updates[field] = req.body[field];
+        }
+      });
+      
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+      
+      // Special handling for note field - ensure empty string not null
+      if (updates.hasOwnProperty('note') && !updates.note) {
+        updates.note = "";
+      }
+      
+      updates.updated_at = new Date().toISOString();
+      
+      const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+      const values = Object.values(updates);
+      values.push(assetId);
+      
+      db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, function(err) {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        const updatedAsset = { ...currentAsset, ...updates, id: parseInt(assetId) };
+        logAudit('assets', assetId, 'UPDATE', currentAsset, updatedAsset, req.session.user.id);
+        
+        res.json(updatedAsset);
+      });
     });
-  });
+  }
 });
 
 app.delete('/api/assets/:id', requireAdmin, (req, res) => {
@@ -1317,99 +1419,6 @@ app.delete('/api/assets/:id', requireAdmin, (req, res) => {
       
       logAudit('assets', assetId, 'DELETE', currentAsset, null, req.session.user.id);
       res.json({ success: true });
-    });
-  });
-});
-
-// PATCH /api/assets/:id - Edit quantity/weight for stocks and precious metals
-app.patch('/api/assets/:id', requireAdmin, (req, res) => {
-  const assetId = parseInt(req.params.id);
-  const {
-    class: assetClass,
-    quantity,
-    avg_price_usd,
-    avg_price_jpy,
-    weight_g,
-    unit_book_cost_jpy_per_gram,
-    recalc = 'auto',
-    refresh_market = true
-  } = req.body;
-
-  if (!assetClass) {
-    return res.status(400).json({ error: 'Asset class is required' });
-  }
-
-  // Start immediate transaction
-  db.serialize(() => {
-    db.run('BEGIN IMMEDIATE', (err) => {
-      if (err) {
-        return res.status(500).json({ error: 'Failed to start transaction' });
-      }
-
-      // Get current asset data
-      db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, asset) => {
-        if (err) {
-          db.run('ROLLBACK');
-          return res.status(500).json({ error: err.message });
-        }
-        if (!asset) {
-          db.run('ROLLBACK');
-          return res.status(404).json({ error: 'Asset not found' });
-        }
-        if (asset.class !== assetClass) {
-          db.run('ROLLBACK');
-          return res.status(400).json({ error: 'Asset class mismatch' });
-        }
-
-        // Update class-specific data
-        updateClassSpecificData(asset, assetId, req.body, (err) => {
-          if (err) {
-            db.run('ROLLBACK');
-            return res.status(400).json({ error: err.message });
-          }
-
-          // Recalculate book value
-          const recalcOptions = {
-            class: assetClass,
-            recalc,
-            newQuantity: quantity,
-            newWeight: weight_g,
-            avgPriceUsd: avg_price_usd,
-            avgPriceJpy: avg_price_jpy,
-            unitBookCostJpyPerGram: unit_book_cost_jpy_per_gram
-          };
-
-          recalcBookValue(db, assetId, recalcOptions)
-            .then(newBookValue => {
-              // Update asset book value
-              db.run('UPDATE assets SET book_value_jpy = ?, updated_at = ? WHERE id = ?',
-                [newBookValue, new Date().toISOString(), assetId], (err) => {
-                  if (err) {
-                    db.run('ROLLBACK');
-                    return res.status(500).json({ error: err.message });
-                  }
-
-                  // Commit transaction
-                  db.run('COMMIT', (err) => {
-                    if (err) {
-                      return res.status(500).json({ error: 'Failed to commit transaction' });
-                    }
-
-                    // Return updated asset
-                    const updatedAsset = { ...asset, book_value_jpy: newBookValue };
-                    res.json({
-                      ok: true,
-                      asset: updatedAsset
-                    });
-                  });
-                });
-            })
-            .catch(err => {
-              db.run('ROLLBACK');
-              res.status(400).json({ error: err.message });
-            });
-        });
-      });
     });
   });
 });

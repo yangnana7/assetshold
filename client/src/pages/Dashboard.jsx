@@ -25,6 +25,7 @@ function Dashboard() {
   const [classSummary, setClassSummary] = useState(null)
   const [classSummaryLoading, setClassSummaryLoading] = useState(false)
 
+
   useEffect(() => {
     fetchDashboardData()
     fetchAssets(1)
@@ -239,6 +240,7 @@ function Dashboard() {
 
     return pages
   }
+
 
   const renderAssetDetails = (asset) => {
     if (asset.class === 'us_stock' && asset.stock_details) {

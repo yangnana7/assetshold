@@ -23,13 +23,30 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
               className={currentPage === 'import' ? 'active' : ''}
               onClick={() => onPageChange('import')}
             >
-              一括インポート
+              インポート・エクスポート
             </button>
             <button
               className={currentPage === 'users' ? 'active' : ''}
               onClick={() => onPageChange('users')}
             >
               ユーザー管理
+            </button>
+          </nav>
+        )}
+        
+        {user && (
+          <nav className="nav">
+            <button
+              className={currentPage === 'rebalance' ? 'active' : ''}
+              onClick={() => onPageChange('rebalance')}
+            >
+              リバランス
+            </button>
+            <button
+              className={currentPage === 'comps' ? 'active' : ''}
+              onClick={() => onPageChange('comps')}
+            >
+              Comps
             </button>
           </nav>
         )}

@@ -1498,7 +1498,7 @@ app.post('/api/import/csv', requireAdmin, upload.single('csvFile'), (req, res) =
   }
 });
 
-// CSV Export
+// CSV Export (existing template endpoint)
 app.get('/api/export', requireAuth, (req, res) => {
   const format = req.query.format || 'csv';
   
@@ -1546,6 +1546,101 @@ app.get('/api/export', requireAuth, (req, res) => {
       })
       .catch(error => {
         res.status(500).json({ error: error.message });
+      });
+  });
+});
+
+// Full Database CSV Export
+app.get('/api/export/full-database', requireAuth, (req, res) => {
+  // Get all assets with their complete details
+  const query = `
+    SELECT 
+      a.*,
+      us.ticker, us.exchange, us.quantity as us_quantity, us.avg_price_usd,
+      jp.code, jp.quantity as jp_quantity, jp.avg_price_jpy,
+      pm.metal, pm.weight_g, pm.purity, pm.unit_price_jpy,
+      w.brand, w.model, w.ref, w.box_papers,
+      re.address, re.land_area_sqm, re.building_area_sqm, re.rights,
+      c.category, c.variant,
+      ca.currency, ca.balance,
+      v.value_jpy as current_value_jpy, v.as_of as valuation_date, v.fx_context
+    FROM assets a
+    LEFT JOIN us_stocks us ON a.id = us.asset_id
+    LEFT JOIN jp_stocks jp ON a.id = jp.asset_id
+    LEFT JOIN precious_metals pm ON a.id = pm.asset_id
+    LEFT JOIN watches w ON a.id = w.asset_id
+    LEFT JOIN real_estates re ON a.id = re.asset_id
+    LEFT JOIN collections c ON a.id = c.asset_id
+    LEFT JOIN cashes ca ON a.id = ca.asset_id
+    LEFT JOIN (
+      SELECT asset_id, value_jpy, as_of, fx_context,
+             ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
+      FROM valuations
+    ) v ON a.id = v.asset_id AND v.rn = 1
+    ORDER BY a.class, a.name
+  `;
+  
+  db.all(query, (err, rows) => {
+    if (err) {
+      console.error('Database export error:', err);
+      return res.status(500).json({ error: 'データベースエクスポートに失敗しました' });
+    }
+    
+    // Create comprehensive CSV with all data
+    const csvHeaders = [
+      // Basic asset info
+      'id', 'class', 'name', 'note', 'acquired_at', 'book_value_jpy', 
+      'valuation_source', 'liquidity_tier', 'tags', 'created_at', 'updated_at',
+      // Current market value
+      'current_value_jpy', 'valuation_date', 'fx_context',
+      // US stock details
+      'ticker', 'exchange', 'us_quantity', 'avg_price_usd',
+      // JP stock details
+      'code', 'jp_quantity', 'avg_price_jpy',
+      // Precious metal details
+      'metal', 'weight_g', 'purity', 'unit_price_jpy',
+      // Watch details
+      'brand', 'model', 'ref', 'box_papers',
+      // Real estate details
+      'address', 'land_area_sqm', 'building_area_sqm', 'rights',
+      // Collection details
+      'category', 'variant',
+      // Cash details
+      'currency', 'balance'
+    ];
+    
+    const csvWriter = createCsvWriter({
+      path: path.join(__dirname, 'data', 'full_database_export.csv'),
+      header: csvHeaders.map(id => ({ id, title: id }))
+    });
+    
+    // Map database rows to CSV format
+    const csvData = rows.map(row => {
+      const mapped = {};
+      csvHeaders.forEach(header => {
+        mapped[header] = row[header] || '';
+      });
+      return mapped;
+    });
+    
+    csvWriter.writeRecords(csvData)
+      .then(() => {
+        res.setHeader('Content-Disposition', `attachment; filename="assets_database_${new Date().toISOString().slice(0, 10)}.csv"`);
+        res.setHeader('Content-Type', 'text/csv');
+        res.download(path.join(__dirname, 'data', 'full_database_export.csv'), (err) => {
+          if (err) {
+            console.error('File download error:', err);
+            res.status(500).json({ error: 'ファイルダウンロードに失敗しました' });
+          } else {
+            // Log the export action
+            logAudit('database', null, 'FULL_EXPORT', null, { record_count: rows.length }, 
+              req.session.user ? req.session.user.id : 'guest');
+          }
+        });
+      })
+      .catch(error => {
+        console.error('CSV generation error:', error);
+        res.status(500).json({ error: 'CSVファイル生成に失敗しました' });
       });
   });
 });

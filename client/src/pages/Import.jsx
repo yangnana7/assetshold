@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import axios from 'axios'
 
-function Import() {
+function ImportExport() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState('')
@@ -88,9 +88,36 @@ function Import() {
     }
   }
 
+  const downloadFullDatabase = async () => {
+    try {
+      setMessage('データベース全体をエクスポート中...')
+      setError('')
+
+      const response = await axios.get('/api/export/full-database', {
+        responseType: 'blob',
+        withCredentials: true
+      })
+
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      const currentDate = new Date().toISOString().slice(0, 10)
+      link.setAttribute('download', `assets_database_${currentDate}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+
+      setMessage('データベース全体のエクスポートが完了しました')
+    } catch (error) {
+      console.error('Database export error:', error)
+      setError('データベースエクスポートに失敗しました')
+      setMessage('')
+    }
+  }
+
   return (
     <div className="container">
-      <h2>一括インポート</h2>
+      <h2>インポート・エクスポート</h2>
       
       <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
         <h3>CSVファイルのインポート</h3>
@@ -196,8 +223,39 @@ precious_metal,純金小判,50g,2025-01-15,268000,manual,L3,"{""metal"": ""gold"
           </pre>
         </div>
       </div>
+
+      <div className="card" style={{ maxWidth: '800px', margin: '2rem auto 0' }}>
+        <h3>データベース一括エクスポート</h3>
+        
+        <div style={{ marginBottom: '2rem' }}>
+          <p>データベース内の全データをCSV形式でダウンロードできます。</p>
+          <p>全ての資産情報、詳細データ、評価履歴が含まれます。</p>
+        </div>
+
+        <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
+          <button
+            className="btn btn-primary"
+            onClick={downloadFullDatabase}
+            disabled={uploading}
+          >
+            データベース全体をダウンロード
+          </button>
+        </div>
+
+        {message && (
+          <div className="success">
+            {message}
+          </div>
+        )}
+
+        {error && (
+          <div className="error" style={{ whiteSpace: 'pre-line' }}>
+            {error}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
-export default Import
+export default ImportExport

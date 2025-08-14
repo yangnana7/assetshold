@@ -544,7 +544,7 @@ function Dashboard() {
                           padding: '8px', 
                           textAlign: 'right', 
                           border: '1px solid #dee2e6',
-                          color: isPositive ? '#28a745' : '#dc3545',
+                          color: isPositive ? '#dc3545' : '#28a745',
                           fontWeight: 'bold'
                         }}>
                           {formatCurrency(deviation)}
@@ -553,7 +553,7 @@ function Dashboard() {
                           padding: '8px', 
                           textAlign: 'right', 
                           border: '1px solid #dee2e6',
-                          color: isPositive ? '#28a745' : '#dc3545',
+                          color: isPositive ? '#dc3545' : '#28a745',
                           fontWeight: 'bold'
                         }}>
                           {isPositive ? '+' : ''}{deviationRate}%

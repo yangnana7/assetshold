@@ -12,6 +12,7 @@ const fs = require('fs');
 const csv = require('csv-parser');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const multer = require('multer');
+const { recalcBookValue } = require('./server/services/bookval');
 
 // MANDATORY PORT CHECK - Must fail if not port 3009
 const REQUIRED_PORT = 3009;
@@ -1319,6 +1320,148 @@ app.delete('/api/assets/:id', requireAdmin, (req, res) => {
     });
   });
 });
+
+// PATCH /api/assets/:id - Edit quantity/weight for stocks and precious metals
+app.patch('/api/assets/:id', requireAdmin, (req, res) => {
+  const assetId = parseInt(req.params.id);
+  const {
+    class: assetClass,
+    quantity,
+    avg_price_usd,
+    avg_price_jpy,
+    weight_g,
+    unit_book_cost_jpy_per_gram,
+    recalc = 'auto',
+    refresh_market = true
+  } = req.body;
+
+  if (!assetClass) {
+    return res.status(400).json({ error: 'Asset class is required' });
+  }
+
+  // Start immediate transaction
+  db.serialize(() => {
+    db.run('BEGIN IMMEDIATE', (err) => {
+      if (err) {
+        return res.status(500).json({ error: 'Failed to start transaction' });
+      }
+
+      // Get current asset data
+      db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, asset) => {
+        if (err) {
+          db.run('ROLLBACK');
+          return res.status(500).json({ error: err.message });
+        }
+        if (!asset) {
+          db.run('ROLLBACK');
+          return res.status(404).json({ error: 'Asset not found' });
+        }
+        if (asset.class !== assetClass) {
+          db.run('ROLLBACK');
+          return res.status(400).json({ error: 'Asset class mismatch' });
+        }
+
+        // Update class-specific data
+        updateClassSpecificData(asset, assetId, req.body, (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return res.status(400).json({ error: err.message });
+          }
+
+          // Recalculate book value
+          const recalcOptions = {
+            class: assetClass,
+            recalc,
+            newQuantity: quantity,
+            newWeight: weight_g,
+            avgPriceUsd: avg_price_usd,
+            avgPriceJpy: avg_price_jpy,
+            unitBookCostJpyPerGram: unit_book_cost_jpy_per_gram
+          };
+
+          recalcBookValue(db, assetId, recalcOptions)
+            .then(newBookValue => {
+              // Update asset book value
+              db.run('UPDATE assets SET book_value_jpy = ?, updated_at = ? WHERE id = ?',
+                [newBookValue, new Date().toISOString(), assetId], (err) => {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return res.status(500).json({ error: err.message });
+                  }
+
+                  // Commit transaction
+                  db.run('COMMIT', (err) => {
+                    if (err) {
+                      return res.status(500).json({ error: 'Failed to commit transaction' });
+                    }
+
+                    // Return updated asset
+                    const updatedAsset = { ...asset, book_value_jpy: newBookValue };
+                    res.json({
+                      ok: true,
+                      asset: updatedAsset
+                    });
+                  });
+                });
+            })
+            .catch(err => {
+              db.run('ROLLBACK');
+              res.status(400).json({ error: err.message });
+            });
+        });
+      });
+    });
+  });
+});
+
+// Helper function to update class-specific data
+function updateClassSpecificData(asset, assetId, body, callback) {
+  const { class: assetClass, quantity, weight_g, avg_price_usd, avg_price_jpy } = body;
+
+  if (assetClass === 'us_stock') {
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return callback(new Error('Quantity must be a positive integer'));
+    }
+    
+    const updateData = { quantity };
+    if (Number.isFinite(avg_price_usd)) {
+      updateData.avg_price_usd = avg_price_usd;
+    }
+    
+    const setClause = Object.keys(updateData).map(key => `${key} = ?`).join(', ');
+    const values = Object.values(updateData);
+    values.push(assetId);
+    
+    db.run(`UPDATE us_stocks SET ${setClause} WHERE asset_id = ?`, values, callback);
+    
+  } else if (assetClass === 'jp_stock') {
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return callback(new Error('Quantity must be a positive integer'));
+    }
+    
+    const updateData = { quantity };
+    if (Number.isFinite(avg_price_jpy)) {
+      updateData.avg_price_jpy = avg_price_jpy;
+    }
+    
+    const setClause = Object.keys(updateData).map(key => `${key} = ?`).join(', ');
+    const values = Object.values(updateData);
+    values.push(assetId);
+    
+    db.run(`UPDATE jp_stocks SET ${setClause} WHERE asset_id = ?`, values, callback);
+    
+  } else if (assetClass === 'precious_metal') {
+    const w = Number(weight_g);
+    if (!(w > 0)) {
+      return callback(new Error('Weight must be a positive number'));
+    }
+    
+    db.run('UPDATE precious_metals SET weight_g = ? WHERE asset_id = ?', [w, assetId], callback);
+    
+  } else {
+    callback(new Error('Unsupported asset class for editing'));
+  }
+}
 
 // Helper function to insert class-specific data
 function insertClassSpecificData(record, assetId, callback) {

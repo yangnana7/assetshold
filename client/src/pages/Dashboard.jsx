@@ -267,6 +267,7 @@ function Dashboard() {
     return pages
   }
 
+
   const renderAssetDetails = (asset) => {
     if (asset.class === 'us_stock' && asset.stock_details) {
       const { quantity, avg_price_usd, ticker } = asset.stock_details

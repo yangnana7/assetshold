@@ -34,6 +34,23 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
           </nav>
         )}
         
+        {user && (
+          <nav className="nav">
+            <button
+              className={currentPage === 'rebalance' ? 'active' : ''}
+              onClick={() => onPageChange('rebalance')}
+            >
+              リバランス
+            </button>
+            <button
+              className={currentPage === 'comps' ? 'active' : ''}
+              onClick={() => onPageChange('comps')}
+            >
+              Comps
+            </button>
+          </nav>
+        )}
+        
         {user ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <span>ようこそ、{user.username}さん ({user.role})</span>

@@ -1,9 +1,0 @@
-*** a/client/src/pages/Dashboard.jsx
---- b/client/src/pages/Dashboard.jsx
-@@
--import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip...sponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-@@
--// TODO: monthly series
-+// monthly series: two lines (book vs valuation)
-+// expects API /api/metrics/monthly to return: [{month:'2025-06', book: 123456, valuation: 130000}, ...]

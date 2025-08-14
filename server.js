@@ -78,20 +78,19 @@ if (!SESSION_SECRET) {
 }
 
 // Helmet disabled to prevent HTTPS redirect issues on Ubuntu deployment
-// Security middleware - Helmet with appropriate CSP
-app.use(helmet({
-  crossOriginOpenerPolicy: false,
-  originAgentCluster: false,
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:"],
-      fontSrc: ["'self'"],
-    }
-  }
-}));
+// app.use(helmet({
+//   crossOriginOpenerPolicy: false,
+//   originAgentCluster: false,
+//   contentSecurityPolicy: {
+//     directives: {
+//       defaultSrc: ["'self'"],
+//       styleSrc: ["'self'", "'unsafe-inline'"],
+//       scriptSrc: ["'self'"],
+//       imgSrc: ["'self'", "data:"],
+//       fontSrc: ["'self'"],
+//     }
+//   }
+// }));
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,

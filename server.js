@@ -106,10 +106,16 @@ app.use(session({
 // Market data providers (BDD requirement 4.3)
 const { makeStockProvider, makeFxProvider, makePreciousMetalProvider } = require('./providers/registry');
 
+// Duplicate detection service
+const DuplicateDetectionService = require('./server/duplicates/service');
+
 // Initialize providers
 const stockProvider = makeStockProvider(MARKET_ENABLE);
 const fxProvider = makeFxProvider(MARKET_ENABLE);
 const preciousMetalProvider = makePreciousMetalProvider(MARKET_ENABLE);
+
+// Initialize duplicate detection service
+const duplicateService = new DuplicateDetectionService(db);
 
 // Cache strategy implementation (BDD requirement 4.4)
 const CACHE_TTL = {
@@ -246,11 +252,28 @@ async function calculateMarketValue(asset) {
       const valueJpy = roundDown2(priceData.price * quantity * fxData.price);
       const fxContext = `USDJPY@${fxData.price}(${fxData.asOf})`;
       
+      // Update us_stocks table with current market price in USD
+      try {
+        await new Promise((resolve, reject) => {
+          db.run(
+            'UPDATE us_stocks SET market_price_usd = ? WHERE asset_id = ?',
+            [priceData.price, asset.id],
+            function(err) {
+              if (err) reject(err);
+              else resolve();
+            }
+          );
+        });
+      } catch (updateError) {
+        console.error(`Failed to update USD market price for asset ${asset.id}:`, updateError);
+      }
+      
       return {
         value_jpy: Math.floor(valueJpy),
         as_of: priceData.asOf,
         fx_context: fxContext,
-        stale: priceData.stale || fxData.stale
+        stale: priceData.stale || fxData.stale,
+        market_price_usd: priceData.price // Include USD price in response
       };
     }
     
@@ -951,6 +974,11 @@ app.get('/api/assets', (req, res) => {
                 ...details,
                 evaluation: evaluation
               };
+              
+              // Include market_price_usd for US stocks
+              if (asset.class === 'us_stock' && details.market_price_usd) {
+                asset.stock_details.market_price_usd = details.market_price_usd;
+              }
             }
             
             // Get latest market valuation for total value
@@ -1631,7 +1659,7 @@ app.get('/api/export/full-database', requireAuth, (req, res) => {
   const query = `
     SELECT 
       a.*,
-      us.ticker, us.exchange, us.quantity as us_quantity, us.avg_price_usd,
+      us.ticker, us.exchange, us.quantity as us_quantity, us.avg_price_usd, us.market_price_usd,
       jp.code, jp.quantity as jp_quantity, jp.avg_price_jpy,
       pm.metal, pm.weight_g, pm.purity, pm.unit_price_jpy,
       w.brand, w.model, w.ref, w.box_papers,
@@ -1933,6 +1961,147 @@ app.get('/api/market/status', (req, res) => {
     },
     now: new Date().toISOString()
   });
+});
+
+// GET /api/market/fx/:pair - Get specific FX rate
+app.get('/api/market/fx/:pair', async (req, res) => {
+  const pair = req.params.pair.toUpperCase();
+  
+  if (!['USDJPY', 'CNYJPY'].includes(pair)) {
+    return res.status(400).json({ error: 'Unsupported currency pair' });
+  }
+
+  try {
+    const key = `fx:${pair}`;
+    const cached = await getCachedPrice(key, CACHE_TTL.fx);
+    
+    if (cached) {
+      return res.json({
+        pair: pair,
+        rate: cached.data.price,
+        currency: 'JPY',
+        asOf: cached.data.asOf,
+        stale: cached.stale
+      });
+    } else {
+      // If no cached data, try to get fresh rate from provider
+      try {
+        const freshRate = await fxProvider.getRate(pair);
+        if (freshRate && freshRate.price) {
+          // Cache the fresh rate
+          await setCachedPrice(`fx:${pair}`, {
+            price: freshRate.price,
+            asOf: freshRate.asOf || new Date().toISOString()
+          });
+          
+          return res.json({
+            pair: pair,
+            rate: freshRate.price,
+            currency: 'JPY',
+            asOf: freshRate.asOf || new Date().toISOString(),
+            stale: false,
+            source: freshRate.source || fxProvider.name
+          });
+        }
+      } catch (providerError) {
+        console.error(`FX provider error for ${pair}:`, providerError.message);
+      }
+      
+      return res.status(404).json({ error: 'No rate data available' });
+    }
+  } catch (error) {
+    console.error('FX rate fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch FX rate' });
+  }
+});
+
+// Duplicate Detection and Management API endpoints
+
+// GET /api/duplicates - Find duplicate assets
+app.get('/api/duplicates', requireAuth, async (req, res) => {
+  try {
+    const duplicateGroups = await duplicateService.findDuplicates();
+    
+    // Filter out groups with ignored duplicates from audit log
+    const filteredGroups = [];
+    
+    for (const group of duplicateGroups) {
+      const assetIds = group.assets.map(a => a.id);
+      
+      // Check if this group has been marked as "not duplicate"
+      const ignoredCheck = await new Promise((resolve) => {
+        db.get(
+          `SELECT id FROM audit_log 
+           WHERE action = 'IGNORE_DUPLICATES' 
+           AND new_values LIKE '%${assetIds.join(',')}%' 
+           ORDER BY created_at DESC LIMIT 1`,
+          (err, row) => {
+            resolve(!!row);
+          }
+        );
+      });
+      
+      if (!ignoredCheck) {
+        filteredGroups.push(group);
+      }
+    }
+    
+    res.json({
+      duplicate_groups: filteredGroups,
+      total_groups: filteredGroups.length,
+      total_assets: filteredGroups.reduce((sum, group) => sum + group.count, 0)
+    });
+  } catch (error) {
+    console.error('Duplicate detection error:', error);
+    res.status(500).json({ error: 'Failed to detect duplicates' });
+  }
+});
+
+// POST /api/duplicates/merge - Merge duplicate assets
+app.post('/api/duplicates/merge', requireAdmin, async (req, res) => {
+  const { asset_ids, keep_asset_id } = req.body;
+  
+  if (!asset_ids || !Array.isArray(asset_ids) || asset_ids.length < 2) {
+    return res.status(400).json({ error: 'At least 2 asset IDs required for merge' });
+  }
+  
+  if (!keep_asset_id || !asset_ids.includes(keep_asset_id)) {
+    return res.status(400).json({ error: 'Keep asset ID must be in the list of assets to merge' });
+  }
+  
+  try {
+    const result = await duplicateService.mergeDuplicates(
+      asset_ids,
+      keep_asset_id,
+      req.session.user.id
+    );
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Duplicate merge error:', error);
+    res.status(500).json({ error: 'Failed to merge duplicates' });
+  }
+});
+
+// POST /api/duplicates/ignore - Mark assets as not duplicates
+app.post('/api/duplicates/ignore', requireAdmin, async (req, res) => {
+  const { asset_ids } = req.body;
+  
+  if (!asset_ids || !Array.isArray(asset_ids) || asset_ids.length < 2) {
+    return res.status(400).json({ error: 'At least 2 asset IDs required' });
+  }
+  
+  try {
+    const result = await duplicateService.markAsNotDuplicates(
+      asset_ids,
+      req.session.user.id
+    );
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Duplicate ignore error:', error);
+    res.status(500).json({ error: 'Failed to ignore duplicates' });
+  }
 });
 
 // CSV File Watcher

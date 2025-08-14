@@ -25,11 +25,16 @@ function Dashboard() {
   const [classSummary, setClassSummary] = useState(null)
   const [classSummaryLoading, setClassSummaryLoading] = useState(false)
 
+  // FX rate states
+  const [usdJpyRate, setUsdJpyRate] = useState(null)
+  const [usdJpyLoading, setUsdJpyLoading] = useState(false)
+
   useEffect(() => {
     fetchDashboardData()
     fetchAssets(1)
     fetchMarketStatus()
     fetchClassSummary()
+    fetchUsdJpyRate()
   }, [])
 
   useEffect(() => {
@@ -98,6 +103,27 @@ function Dashboard() {
     }
   }
 
+  const fetchUsdJpyRate = async () => {
+    try {
+      setUsdJpyLoading(true)
+      // Use the price cache to get USDJPY rate
+      const response = await axios.get('/api/market/fx/USDJPY')
+      if (response.data && response.data.rate) {
+        setUsdJpyRate({
+          rate: response.data.rate,
+          stale: response.data.stale || false,
+          lastUpdated: response.data.asOf || new Date().toISOString()
+        })
+      }
+    } catch (error) {
+      console.error('USD/JPY rate fetch error:', error)
+      // No hardcoded fallback - this will be handled by server-side fallback
+      setUsdJpyRate(null)
+    } finally {
+      setUsdJpyLoading(false)
+    }
+  }
+
 
   const refreshAllMarketData = async () => {
     try {
@@ -112,6 +138,7 @@ function Dashboard() {
       await fetchAssets(currentPage)
       await fetchDashboardData()
       await fetchClassSummary()
+      await fetchUsdJpyRate()
     } catch (error) {
       console.error('Bulk valuation refresh error:', error)
       // Handle different error codes
@@ -322,6 +349,19 @@ function Dashboard() {
             {marketStatus.enabled && (
               <div className="market-providers">
                 Stock: {marketStatus.provider.stock} | FX: {marketStatus.provider.fx} | Precious Metal: {marketStatus.provider.precious_metal}
+              </div>
+            )}
+            {usdJpyRate && (
+              <div className="fx-rate-display" style={{ 
+                color: '#6c757d', 
+                fontSize: '0.9em', 
+                fontWeight: 'normal',
+                marginLeft: '16px',
+                marginRight: '16px'
+              }}>
+                USD/JPY: {usdJpyRate.rate?.toFixed(2)}
+                {usdJpyRate.stale && <span title="古いデータ">*</span>}
+                {usdJpyRate.fallback && <span title="フォールバック値"> (est)</span>}
               </div>
             )}
             {marketStatus.enabled && (
@@ -633,6 +673,11 @@ function Dashboard() {
                     {(asset.class === 'us_stock' || asset.class === 'jp_stock' || asset.class === 'precious_metal') && getMarketUnitPrice(asset) && (
                       <div className="asset-unit-price">
                         時価：{getMarketUnitPrice(asset)}
+                        {asset.class === 'us_stock' && getUSDUnitPrice(asset, usdJpyRate) && (
+                          <div style={{ fontSize: '0.9em', color: '#6c757d' }}>
+                            時価：{getUSDUnitPrice(asset, usdJpyRate)}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -715,6 +760,25 @@ function getMarketUnitPrice(asset) {
     }
   }
   
+  return null
+}
+
+function getUSDUnitPrice(asset, usdJpyRate) {
+  // Use direct USD market price from Google Finance for US stocks
+  if (asset.class === 'us_stock' && asset.stock_details) {
+    const { market_price_usd } = asset.stock_details
+    if (market_price_usd && market_price_usd > 0) {
+      return `$${market_price_usd.toFixed(2)} /株`
+    }
+    
+    // Fallback to FX conversion if direct USD price not available
+    if (usdJpyRate && asset.stock_details.quantity > 0 && usdJpyRate.rate) {
+      const totalValueJpy = asset.current_value_jpy || asset.book_value_jpy
+      const unitPriceJpy = totalValueJpy / asset.stock_details.quantity
+      const unitPriceUsd = unitPriceJpy / usdJpyRate.rate
+      return `$${unitPriceUsd.toFixed(2)} /株 (計算値)`
+    }
+  }
   return null
 }
 

@@ -3,6 +3,11 @@
 const { NoopProvider, NoopFxProvider } = require('./base');
 const { YahooStockProvider, YahooFxProvider } = require('./yahoo');
 const { TanakaPreciousMetalProvider } = require('./tanaka');
+const ExchangeRatesFxProvider = require('./fx/ExchangeRatesFxProvider');
+const OandaFxProvider = require('./fx/OandaFxProvider');
+const GoogleFinanceFxProvider = require('./fx/GoogleFinanceFxProvider');
+const MultiSourceFxProvider = require('./fx/MultiSourceFxProvider');
+const GoogleFinanceStockProvider = require('./stock/GoogleFinanceStockProvider');
 
 function makeStockProvider(marketEnable = false) {
   if (!marketEnable) {
@@ -10,13 +15,18 @@ function makeStockProvider(marketEnable = false) {
     return new NoopProvider();
   }
 
-  // Priority: yahoo (API key free) -> stooq (fallback) -> noop (dummy)
+  // Priority: google-finance -> yahoo (fallback) -> noop
   try {
-    console.log('Stock provider: yahoo');
-    return new YahooStockProvider();
+    console.log('Stock provider: google-finance');
+    return new GoogleFinanceStockProvider();
   } catch (error) {
-    console.log('Stock provider: noop (yahoo unavailable)');
-    return new NoopProvider();
+    try {
+      console.log('Stock provider: yahoo (fallback)');
+      return new YahooStockProvider();
+    } catch (yahooError) {
+      console.log('Stock provider: noop (all providers unavailable)');
+      return new NoopProvider();
+    }
   }
 }
 
@@ -26,12 +36,33 @@ function makeFxProvider(marketEnable = false) {
     return new NoopFxProvider();
   }
 
+  // Priority: google-finance -> multi-source -> oanda-style -> exchangerate-api -> yahoo -> noop
   try {
-    console.log('FX provider: yahoo');
-    return new YahooFxProvider();
+    console.log('FX provider: google-finance');
+    return new GoogleFinanceFxProvider();
   } catch (error) {
-    console.log('FX provider: noop (yahoo unavailable)');
-    return new NoopFxProvider();
+    try {
+      console.log('FX provider: multi-source (fallback)');
+      return new MultiSourceFxProvider();
+    } catch (multiError) {
+      try {
+        console.log('FX provider: oanda-style (fallback)');
+        return new OandaFxProvider();
+      } catch (oandaError) {
+        try {
+          console.log('FX provider: exchangerate-api (fallback)');
+          return new ExchangeRatesFxProvider();
+        } catch (exchangeError) {
+          try {
+            console.log('FX provider: yahoo (fallback)');
+            return new YahooFxProvider();
+          } catch (yahooError) {
+            console.log('FX provider: noop (all providers unavailable)');
+            return new NoopFxProvider();
+          }
+        }
+      }
+    }
   }
 }
 

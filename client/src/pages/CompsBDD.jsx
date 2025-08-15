@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card-simple';
+import { Button } from '@/components/ui/button-simple';
+import { Badge } from '@/components/ui/badge-simple';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs-simple';
+import { Input } from '@/components/ui/input-simple';
 import { 
   TrendingUp, 
   TrendingDown, 

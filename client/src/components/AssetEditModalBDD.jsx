@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card-simple';
+import { Button } from '@/components/ui/button-simple';
+import { Badge } from '@/components/ui/badge-simple';
+import { Input } from '@/components/ui/input-simple';
 import { Pencil, Save, X } from 'lucide-react';
 
 // BDD-compliant AssetEditModal v2 (Single Screen, Single Transaction)

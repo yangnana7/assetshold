@@ -15,15 +15,15 @@ function makeStockProvider(marketEnable = false) {
     return new NoopProvider();
   }
 
-  // Priority: google-finance -> yahoo (fallback) -> noop
+  // Priority: yahoo (more stable for US) -> google-finance (fallback) -> noop
   try {
-    console.log('Stock provider: google-finance');
-    return new GoogleFinanceStockProvider();
-  } catch (error) {
+    console.log('Stock provider: yahoo');
+    return new YahooStockProvider();
+  } catch (yahooError) {
     try {
-      console.log('Stock provider: yahoo (fallback)');
-      return new YahooStockProvider();
-    } catch (yahooError) {
+      console.log('Stock provider: google-finance (fallback)');
+      return new GoogleFinanceStockProvider();
+    } catch (error) {
       console.log('Stock provider: noop (all providers unavailable)');
       return new NoopProvider();
     }

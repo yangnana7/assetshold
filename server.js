@@ -944,11 +944,26 @@ app.get('/api/assets', (req, res) => {
               }
             }
             
-            // Get latest market valuation for total value
-            db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+            // Get latest market valuation for total value (and fx_context for derived per-share)
+            db.get('SELECT value_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
               if (!err && valuation && valuation.value_jpy) {
                 // Use actual market valuation if available
                 asset.current_value_jpy = valuation.value_jpy;
+
+                // US株の単価（USD）派生: valuation と fx_context があり quantity>0 のとき
+                if (asset.class === 'us_stock' && asset.stock_details) {
+                  const qty = Number(asset.stock_details.quantity || 0);
+                  if (qty > 0 && (!asset.stock_details.market_price_usd || Number.isNaN(Number(asset.stock_details.market_price_usd)))) {
+                    const m = (valuation.fx_context || '').match(/USDJPY@([0-9.]+)/);
+                    const rate = m ? parseFloat(m[1]) : null;
+                    if (rate && rate > 0) {
+                      const unitUsd = valuation.value_jpy / (qty * rate);
+                      if (Number.isFinite(unitUsd) && unitUsd > 0 && unitUsd < 10000) {
+                        asset.stock_details.market_price_usd = Math.round(unitUsd * 100) / 100;
+                      }
+                    }
+                  }
+                }
               } else {
                 // Fallback to legacy calculation
                 asset.current_value_jpy = calculateCurrentValue(asset);
@@ -1268,12 +1283,13 @@ app.patch('/api/assets/:id', requireAdmin, (req, res) => {
     tags
   } = req.body;
 
-  // Check if this is a quantity/weight edit request
-  const isQuantityEdit = assetClass && (quantity !== undefined || weight_g !== undefined);
+  // クラス別の数量/詳細編集トリガー（いずれかのクラス別フィールドが含まれていれば統合処理へ）
+  const classSpecificKeys = ['quantity','weight_g','avg_price_usd','avg_price_jpy','purity','unit_price_jpy','exchange','code','ticker'];
+  const isClassSpecificEdit = !!assetClass && classSpecificKeys.some(k => Object.prototype.hasOwnProperty.call(req.body, k));
   
 
-  if (isQuantityEdit) {
-    // New quantity/weight editing logic
+  if (isClassSpecificEdit) {
+    // 数量・詳細編集の統合処理
     if (!assetClass) {
       return res.status(400).json({ error: 'Asset class is required' });
     }
@@ -1416,50 +1432,72 @@ app.delete('/api/assets/:id', requireAdmin, (req, res) => {
   });
 });
 
-// Helper function to update class-specific data
+// Helper function to update class-specific data（数量編集と詳細編集を統合）
 function updateClassSpecificData(asset, assetId, body, callback) {
-  const { class: assetClass, quantity, weight_g, avg_price_usd, avg_price_jpy } = body;
+  const { class: assetClass } = body;
 
   if (assetClass === 'us_stock') {
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      return callback(new Error('Quantity must be a positive integer'));
+    const updateData = {};
+    // 許容フィールド: quantity, avg_price_usd, exchange, ticker
+    if (body.quantity !== undefined) {
+      const q = Number(body.quantity);
+      if (!Number.isInteger(q) || q <= 0) return callback(new Error('Quantity must be a positive integer'));
+      updateData.quantity = q;
     }
-    
-    const updateData = { quantity };
-    if (Number.isFinite(avg_price_usd)) {
-      updateData.avg_price_usd = avg_price_usd;
+    if (body.avg_price_usd !== undefined) {
+      const p = Number(body.avg_price_usd);
+      if (!Number.isFinite(p) || p <= 0) return callback(new Error('avg_price_usd must be a positive number'));
+      updateData.avg_price_usd = p;
     }
-    
+    if (body.exchange !== undefined) updateData.exchange = String(body.exchange || '');
+    if (body.ticker !== undefined) updateData.ticker = String(body.ticker || '').toUpperCase();
+    if (Object.keys(updateData).length === 0) return callback(new Error('No editable fields for us_stock'));
     const setClause = Object.keys(updateData).map(key => `${key} = ?`).join(', ');
-    const values = Object.values(updateData);
-    values.push(assetId);
-    
+    const values = [...Object.values(updateData), assetId];
     db.run(`UPDATE us_stocks SET ${setClause} WHERE asset_id = ?`, values, callback);
-    
+
   } else if (assetClass === 'jp_stock') {
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      return callback(new Error('Quantity must be a positive integer'));
+    const updateData = {};
+    // 許容フィールド: quantity, avg_price_jpy, code
+    if (body.quantity !== undefined) {
+      const q = Number(body.quantity);
+      if (!Number.isInteger(q) || q <= 0) return callback(new Error('Quantity must be a positive integer'));
+      updateData.quantity = q;
     }
-    
-    const updateData = { quantity };
-    if (Number.isFinite(avg_price_jpy)) {
-      updateData.avg_price_jpy = avg_price_jpy;
+    if (body.avg_price_jpy !== undefined) {
+      const p = Number(body.avg_price_jpy);
+      if (!Number.isFinite(p) || p <= 0) return callback(new Error('avg_price_jpy must be a positive number'));
+      updateData.avg_price_jpy = p;
     }
-    
+    if (body.code !== undefined) updateData.code = String(body.code || '');
+    if (Object.keys(updateData).length === 0) return callback(new Error('No editable fields for jp_stock'));
     const setClause = Object.keys(updateData).map(key => `${key} = ?`).join(', ');
-    const values = Object.values(updateData);
-    values.push(assetId);
-    
+    const values = [...Object.values(updateData), assetId];
     db.run(`UPDATE jp_stocks SET ${setClause} WHERE asset_id = ?`, values, callback);
-    
+
   } else if (assetClass === 'precious_metal') {
-    const w = Number(weight_g);
-    if (!(w > 0)) {
-      return callback(new Error('Weight must be a positive number'));
+    const updateData = {};
+    // 許容フィールド: weight_g, purity, unit_price_jpy
+    if (body.weight_g !== undefined) {
+      const w = Number(body.weight_g);
+      if (!(w > 0)) return callback(new Error('Weight must be a positive number'));
+      updateData.weight_g = w;
     }
-    
-    db.run('UPDATE precious_metals SET weight_g = ? WHERE asset_id = ?', [w, assetId], callback);
-    
+    if (body.purity !== undefined && body.purity !== null && body.purity !== '') {
+      const pu = Number(body.purity);
+      if (!(pu > 0 && pu <= 1)) return callback(new Error('purity must be within (0, 1]'));
+      updateData.purity = pu;
+    }
+    if (body.unit_price_jpy !== undefined) {
+      const up = Number(body.unit_price_jpy);
+      if (!Number.isFinite(up) || up <= 0) return callback(new Error('unit_price_jpy must be a positive number'));
+      updateData.unit_price_jpy = up;
+    }
+    if (Object.keys(updateData).length === 0) return callback(new Error('No editable fields for precious_metal'));
+    const setClause = Object.keys(updateData).map(key => `${key} = ?`).join(', ');
+    const values = [...Object.values(updateData), assetId];
+    db.run(`UPDATE precious_metals SET ${setClause} WHERE asset_id = ?`, values, callback);
+
   } else {
     callback(new Error('Unsupported asset class for editing'));
   }

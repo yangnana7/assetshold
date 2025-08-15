@@ -1881,6 +1881,8 @@ app.get('/api/export', requireAuth, (req, res) => {
 // Full Database CSV Export
 app.get('/api/export/full-database', requireAuth, (req, res) => {
   // Get all assets with their complete details
+  // Use a correlated subquery to pick the latest valuation per asset
+  // to keep compatibility with older SQLite versions without window functions.
   const query = `
     SELECT 
       a.*,
@@ -1900,11 +1902,12 @@ app.get('/api/export/full-database', requireAuth, (req, res) => {
     LEFT JOIN real_estates re ON a.id = re.asset_id
     LEFT JOIN collections c ON a.id = c.asset_id
     LEFT JOIN cashes ca ON a.id = ca.asset_id
-    LEFT JOIN (
-      SELECT asset_id, value_jpy, as_of, fx_context,
-             ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-      FROM valuations
-    ) v ON a.id = v.asset_id AND v.rn = 1
+    LEFT JOIN valuations v ON v.id = (
+      SELECT vv.id FROM valuations vv 
+      WHERE vv.asset_id = a.id 
+      ORDER BY vv.as_of DESC, vv.id DESC 
+      LIMIT 1
+    )
     ORDER BY a.class, a.name
   `;
   
@@ -1937,6 +1940,17 @@ app.get('/api/export/full-database', requireAuth, (req, res) => {
       'currency', 'balance'
     ];
     
+    // Ensure output directory exists
+    try {
+      const outDir = path.join(__dirname, 'data');
+      if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
+      }
+    } catch (mkErr) {
+      console.error('Output directory create error:', mkErr);
+      return res.status(500).json({ error: '出力ディレクトリの作成に失敗しました' });
+    }
+
     const csvWriter = createCsvWriter({
       path: path.join(__dirname, 'data', 'full_database_export.csv'),
       header: csvHeaders.map(id => ({ id, title: id }))

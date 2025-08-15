@@ -8,6 +8,16 @@ export function formatCurrency(amount) {
   }).format(amount)
 }
 
+export function formatUsd(amount) {
+  if (amount == null || isNaN(amount)) return '$0.00'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)
+}
+
 export function formatDate(dateString) {
   if (!dateString) return '-'
   

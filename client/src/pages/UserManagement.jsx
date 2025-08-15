@@ -133,11 +133,11 @@ function UserManagement() {
   }
 
   if (loading) {
-    return <div className="user-management">Loading users...</div>
+    return <div className="p-6 max-w-6xl mx-auto">Loading users...</div>
   }
 
   return (
-    <div className="user-management">
+    <div className="p-6 max-w-6xl mx-auto">
       <div className="page-header">
         <h1>User Management</h1>
         <p>Manage system users and their roles</p>
@@ -192,9 +192,12 @@ function UserManagement() {
                   <option value="admin">Admin</option>
                 </select>
               </div>
-              <button type="submit" className="btn btn-primary">
-                Create User
-              </button>
+              <div className="form-group">
+                <label>&nbsp;</label>
+                <button type="submit" className="btn btn-primary">
+                  Create User
+                </button>
+              </div>
             </div>
           </form>
         </section>

@@ -54,6 +54,13 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
             >
               Comps
             </button>
+            <button
+              className={currentPage === 'ui-demo' ? 'active' : ''}
+              onClick={() => onPageChange('ui-demo')}
+              style={{ backgroundColor: currentPage === 'ui-demo' ? '#ffc107' : '#6c757d' }}
+            >
+              UI Demo
+            </button>
           </nav>
         )}
         

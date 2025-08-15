@@ -973,6 +973,22 @@ app.get('/api/assets', (req, res) => {
                     const gl = curTotalUsd - costTotalUsd;
                     asset.stock_details.gain_loss_usd = Math.round(gl * 100) / 100;
                     asset.stock_details.gain_loss_pct_usd = costTotalUsd > 0 ? Math.round((gl / costTotalUsd) * 10000) / 100 : null;
+                    
+                    // 為替レート統一: USD建て損益を現在レートで円換算（US株の正しい損益計算）
+                    const m = (valuation.fx_context || '').match(/USDJPY@([0-9.]+)/);
+                    const currentRate = m ? parseFloat(m[1]) : null;
+                    if (currentRate && currentRate > 0) {
+                      // USD建て簿価を現在レートで円換算
+                      const currentBookValueJpy = Math.floor(costTotalUsd * currentRate);
+                      // 円建て損益を再計算（為替レート統一）
+                      asset.gain_loss_jpy = asset.current_value_jpy - currentBookValueJpy;
+                      asset.gain_loss_percentage = costTotalUsd > 0 ? ((gl / costTotalUsd) * 100).toFixed(2) : "0.00";
+                      
+                      // 統一レート使用フラグ
+                      asset.unified_fx_rate = true;
+                      asset.original_book_value_jpy = asset.book_value_jpy;
+                      asset.current_book_value_jpy = currentBookValueJpy;
+                    }
                   }
                 }
               } else {
@@ -980,8 +996,11 @@ app.get('/api/assets', (req, res) => {
                 asset.current_value_jpy = calculateCurrentValue(asset);
               }
               
-              asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-              asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+              // US株以外、または為替統一が適用されていない場合の従来計算
+              if (asset.class !== 'us_stock' || !asset.unified_fx_rate) {
+                asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+                asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+              }
             
               enhancedRows.push(asset);
               completed++;
@@ -1128,18 +1147,58 @@ app.get('/api/assets/:id', (req, res) => {
           asset.stock_details = details;
         }
         
-        // Get latest market valuation for total value
-        db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        // Get latest market valuation for total value (with fx_context for US stocks)
+        db.get('SELECT value_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
           if (!err && valuation && valuation.value_jpy) {
             // Use actual market valuation if available
             asset.current_value_jpy = valuation.value_jpy;
+            
+            // US株の場合: USD建て損益計算で為替レート統一
+            if (asset.class === 'us_stock' && asset.stock_details && valuation.fx_context) {
+              const qty = Number(asset.stock_details.quantity || 0);
+              const avgPriceUsd = Number(asset.stock_details.avg_price_usd || 0);
+              const marketPriceUsd = Number(asset.stock_details.market_price_usd || 0);
+              
+              if (qty > 0 && avgPriceUsd > 0 && marketPriceUsd > 0) {
+                const curTotalUsd = marketPriceUsd * qty;
+                const costTotalUsd = avgPriceUsd * qty;
+                const glUsd = curTotalUsd - costTotalUsd;
+                
+                // 現在の為替レートを抽出
+                const m = valuation.fx_context.match(/USDJPY@([0-9.]+)/);
+                const currentRate = m ? parseFloat(m[1]) : null;
+                
+                if (currentRate && currentRate > 0) {
+                  // USD建て簿価を現在レートで円換算
+                  const currentBookValueJpy = Math.floor(costTotalUsd * currentRate);
+                  
+                  // 円建て損益を再計算（為替レート統一）
+                  asset.gain_loss_jpy = asset.current_value_jpy - currentBookValueJpy;
+                  asset.gain_loss_percentage = costTotalUsd > 0 ? ((glUsd / costTotalUsd) * 100).toFixed(2) : "0.00";
+                  
+                  // 追加情報
+                  asset.unified_fx_rate = true;
+                  asset.original_book_value_jpy = asset.book_value_jpy;
+                  asset.current_book_value_jpy = currentBookValueJpy;
+                  
+                  // USD建て損益情報
+                  asset.stock_details.market_value_usd = Math.round(curTotalUsd * 100) / 100;
+                  asset.stock_details.cost_total_usd = Math.round(costTotalUsd * 100) / 100;
+                  asset.stock_details.gain_loss_usd = Math.round(glUsd * 100) / 100;
+                  asset.stock_details.gain_loss_pct_usd = costTotalUsd > 0 ? Math.round((glUsd / costTotalUsd) * 10000) / 100 : null;
+                }
+              }
+            }
           } else {
             // Fallback to legacy calculation
             asset.current_value_jpy = calculateCurrentValue(asset);
           }
           
-          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          // US株以外、または為替統一が適用されていない場合の従来計算
+          if (asset.class !== 'us_stock' || !asset.unified_fx_rate) {
+            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          }
           
           res.json(asset);
         });

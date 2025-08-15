@@ -584,29 +584,41 @@ app.get('/api/dashboard', (req, res) => {
       SELECT SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as total 
       FROM assets a
       LEFT JOIN (
-        SELECT asset_id, value_jpy,
-               ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) v ON a.id = v.asset_id AND v.rn = 1
+        SELECT vv.asset_id, vv.value_jpy
+        FROM valuations vv
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) AS max_as_of
+          FROM valuations
+          GROUP BY asset_id
+        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+      ) v ON a.id = v.asset_id
     `,
     assetsByClass: `
       SELECT a.class, COUNT(*) as count, SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as total_value 
       FROM assets a
       LEFT JOIN (
-        SELECT asset_id, value_jpy,
-               ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) v ON a.id = v.asset_id AND v.rn = 1
+        SELECT vv.asset_id, vv.value_jpy
+        FROM valuations vv
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) AS max_as_of
+          FROM valuations
+          GROUP BY asset_id
+        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+      ) v ON a.id = v.asset_id
       GROUP BY a.class
     `,
     topAssets: `
       SELECT a.name, a.note, a.book_value_jpy, COALESCE(v.value_jpy, a.book_value_jpy) as current_value_jpy
       FROM assets a
       LEFT JOIN (
-        SELECT asset_id, value_jpy,
-               ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) v ON a.id = v.asset_id AND v.rn = 1
+        SELECT vv.asset_id, vv.value_jpy
+        FROM valuations vv
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) AS max_as_of
+          FROM valuations
+          GROUP BY asset_id
+        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+      ) v ON a.id = v.asset_id
       ORDER BY COALESCE(v.value_jpy, a.book_value_jpy) DESC 
       LIMIT 3
     `,
@@ -617,10 +629,14 @@ app.get('/api/dashboard', (req, res) => {
         SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as market_value_total
       FROM assets a
       LEFT JOIN (
-        SELECT asset_id, value_jpy,
-               ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY as_of DESC, id DESC) as rn
-        FROM valuations
-      ) v ON a.id = v.asset_id AND v.rn = 1
+        SELECT vv.asset_id, vv.value_jpy
+        FROM valuations vv
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) AS max_as_of
+          FROM valuations
+          GROUP BY asset_id
+        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+      ) v ON a.id = v.asset_id
       WHERE a.created_at IS NOT NULL 
       GROUP BY strftime('%Y-%m', a.created_at)
       ORDER BY month DESC 
@@ -1854,6 +1870,16 @@ app.get('/api/export', requireAuth, (req, res) => {
     }
     
     // CSV format
+    try {
+      const outDir = path.join(__dirname, 'data');
+      if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
+      }
+    } catch (mkErr) {
+      console.error('Output directory create error (template export):', mkErr);
+      return res.status(500).json({ error: '出力ディレクトリの作成に失敗しました' });
+    }
+
     const csvWriter = createCsvWriter({
       path: path.join(__dirname, 'data', 'portfolio_export.csv'),
       header: [
@@ -1870,7 +1896,12 @@ app.get('/api/export', requireAuth, (req, res) => {
     
     csvWriter.writeRecords(assets)
       .then(() => {
-        res.download(path.join(__dirname, 'data', 'portfolio_export.csv'));
+        res.download(path.join(__dirname, 'data', 'portfolio_export.csv'), (err) => {
+          if (err) {
+            console.error('File download error (template export):', err);
+            return res.status(500).json({ error: 'ファイルダウンロードに失敗しました' });
+          }
+        });
       })
       .catch(error => {
         res.status(500).json({ error: error.message });

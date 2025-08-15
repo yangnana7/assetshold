@@ -116,7 +116,7 @@ function ImportExport() {
   }
 
   return (
-    <div className="container">
+    <div className="p-6 max-w-6xl mx-auto">
       <h2>インポート・エクスポート</h2>
       
       <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>

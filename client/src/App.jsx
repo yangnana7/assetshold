@@ -6,8 +6,6 @@ import AssetList from './pages/AssetList'
 import ImportExport from './pages/Import'
 import Login from './pages/Login'
 import UserManagement from './pages/UserManagement'
-import Rebalance from './pages/Rebalance'
-import Comps from './pages/Comps'
 import Duplicates from './pages/Duplicates'
 // BDD-compliant components
 import CompsBDD from './pages/CompsBDD'
@@ -41,12 +39,8 @@ function App() {
       case 'duplicates':
         return user && user.role === 'admin' ? <Duplicates /> : <Dashboard />
       case 'rebalance':
-        return <Rebalance />
-      case 'rebalance-bdd':
         return <RebalanceBDD />
       case 'comps':
-        return <Comps />
-      case 'comps-bdd':
         return <CompsBDD />
       case 'ui-demo':
         return <PortfolioUIKitsDemo />

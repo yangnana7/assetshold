@@ -284,7 +284,7 @@ export default function CompsBDDPage() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <Wand2 className="w-6 h-6" />
-          <h1 className="text-2xl font-bold">参考価格（コンプ）— BDD準拠 3ステップ</h1>
+          <h1 className="text-2xl font-bold">参考価格（コンプ）</h1>
         </div>
         <Badge variant="secondary" className="rounded-full">一般向けUI</Badge>
       </div>

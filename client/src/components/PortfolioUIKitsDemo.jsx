@@ -534,7 +534,7 @@ const PortfolioUIKitsDemo = () => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6">資産ポートフォリオ UIコンポーネント — BDD準拠</h1>
+      <h1 className="text-3xl font-bold mb-6">資産ポートフォリオ UIコンポーネント</h1>
       
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-4">

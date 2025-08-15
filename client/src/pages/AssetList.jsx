@@ -360,11 +360,11 @@ function AssetList() {
     getAssetClassName(asset.class).toLowerCase().includes(filter.toLowerCase())
   )
 
-  if (loading) return <div className="container">Loading...</div>
-  if (error) return <div className="container"><div className="error">{error}</div></div>
+  if (loading) return <div className="p-6 max-w-6xl mx-auto">Loading...</div>
+  if (error) return <div className="p-6 max-w-6xl mx-auto"><div className="error">{error}</div></div>
 
   return (
-    <div className="container">
+    <div className="p-6 max-w-6xl mx-auto">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <h2>資産一覧</h2>
         <button 

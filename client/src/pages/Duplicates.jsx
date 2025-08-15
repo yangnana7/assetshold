@@ -120,7 +120,7 @@ const Duplicates = () => {
 
   if (loading) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="p-6 max-w-6xl mx-auto">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
           <p className="mt-2">重複データを検出中...</p>
@@ -131,7 +131,7 @@ const Duplicates = () => {
 
   if (error) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="p-6 max-w-6xl mx-auto">
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
           <strong>エラー:</strong> {error}
         </div>
@@ -146,7 +146,7 @@ const Duplicates = () => {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="p-6 max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-3xl font-bold text-gray-900">重複データ統合</h1>
         <button

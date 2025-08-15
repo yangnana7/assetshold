@@ -154,9 +154,9 @@ function Dashboard() {
     }
   }
 
-  if (loading) return <div className="container">Loading...</div>
-  if (error) return <div className="container"><div className="error">{error}</div></div>
-  if (!dashboardData) return <div className="container">データがありません</div>
+  if (loading) return <div className="p-6 max-w-6xl mx-auto">Loading...</div>
+  if (error) return <div className="p-6 max-w-6xl mx-auto"><div className="error">{error}</div></div>
+  if (!dashboardData) return <div className="p-6 max-w-6xl mx-auto">データがありません</div>
 
   const totalAssets = dashboardData.totalAssets?.[0]?.count || 0
   const totalValue = dashboardData.totalValue?.[0]?.total || 0
@@ -339,7 +339,7 @@ function Dashboard() {
   }
 
   return (
-    <div className="container">
+    <div className="p-6 max-w-6xl mx-auto">
       {/* Market Data Status */}
       {marketStatus && (
         <div className="market-status-bar">

@@ -240,7 +240,7 @@ export default function RebalanceBDDPage() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <SlidersHorizontal className="w-6 h-6" />
-          <h1 className="text-2xl font-bold">配分調整（リバランス）— BDD準拠 3ステップ</h1>
+          <h1 className="text-2xl font-bold">配分調整（リバランス）</h1>
         </div>
         <Badge variant="secondary" className="rounded-full">一般向けUI</Badge>
       </div>

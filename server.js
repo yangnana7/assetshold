@@ -1922,7 +1922,7 @@ app.get('/api/export/full-database', requireAuth, (req, res) => {
       // Current market value
       'current_value_jpy', 'valuation_date', 'fx_context',
       // US stock details
-      'ticker', 'exchange', 'us_quantity', 'avg_price_usd',
+      'ticker', 'exchange', 'us_quantity', 'avg_price_usd', 'market_price_usd',
       // JP stock details
       'code', 'jp_quantity', 'avg_price_jpy',
       // Precious metal details

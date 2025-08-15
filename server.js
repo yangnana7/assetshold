@@ -1902,12 +1902,15 @@ app.get('/api/export/full-database', requireAuth, (req, res) => {
     LEFT JOIN real_estates re ON a.id = re.asset_id
     LEFT JOIN collections c ON a.id = c.asset_id
     LEFT JOIN cashes ca ON a.id = ca.asset_id
-    LEFT JOIN valuations v ON v.id = (
-      SELECT vv.id FROM valuations vv 
-      WHERE vv.asset_id = a.id 
-      ORDER BY vv.as_of DESC, vv.id DESC 
-      LIMIT 1
-    )
+    LEFT JOIN (
+      SELECT vv.asset_id, vv.value_jpy, vv.as_of, vv.fx_context
+      FROM valuations vv
+      INNER JOIN (
+        SELECT asset_id, MAX(as_of) AS max_as_of
+        FROM valuations
+        GROUP BY asset_id
+      ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+    ) v ON v.asset_id = a.id
     ORDER BY a.class, a.name
   `;
   

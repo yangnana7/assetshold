@@ -104,21 +104,27 @@ class GoogleFinanceStockProvider extends StockProvider {
     let priceMatch = html.match(/data-last-price="([0-9.,]+)"/);
     if (priceMatch) {
       const price = this._parseNumber(priceMatch[1]);
-      return { price, ...this._extractAdditionalData(html) };
+      if (this._isReasonablePrice(price, symbol)) {
+        return { price, ...this._extractAdditionalData(html) };
+      }
     }
 
     // Strategy 2: Look for specific div with stock price (YMlKec class)
-    priceMatch = html.match(/<div[^>]*class="[^"]*YMlKec[^"]*"[^>]*>([0-9.,]+)<\/div>/);
+    priceMatch = html.match(/<div[^>]*class="[^"]*YMlKec[^"]*"[^>]*>([$€£]?[0-9.,]+)<\/div>/);
     if (priceMatch) {
       const price = this._parseNumber(priceMatch[1]);
-      return { price, ...this._extractAdditionalData(html) };
+      if (this._isReasonablePrice(price, symbol)) {
+        return { price, ...this._extractAdditionalData(html) };
+      }
     }
 
     // Strategy 3: Look for div with fxKbKc class (main price display)
-    priceMatch = html.match(/<div[^>]*class="[^"]*fxKbKc[^"]*"[^>]*>([0-9.,]+)<\/div>/);
+    priceMatch = html.match(/<div[^>]*class="[^"]*fxKbKc[^"]*"[^>]*>([$€£]?[0-9.,]+)<\/div>/);
     if (priceMatch) {
       const price = this._parseNumber(priceMatch[1]);
-      return { price, ...this._extractAdditionalData(html) };
+      if (this._isReasonablePrice(price, symbol)) {
+        return { price, ...this._extractAdditionalData(html) };
+      }
     }
 
     // Strategy 4: Look for price in JSON-LD structured data
@@ -128,7 +134,9 @@ class GoogleFinanceStockProvider extends StockProvider {
         const jsonData = JSON.parse(jsonLdMatch[1]);
         if (jsonData.price || (jsonData['@graph'] && jsonData['@graph'].price)) {
           const price = this._parseNumber((jsonData.price || jsonData['@graph'].price).toString());
-          return { price, ...this._extractAdditionalData(html) };
+          if (this._isReasonablePrice(price, symbol)) {
+            return { price, ...this._extractAdditionalData(html) };
+          }
         }
       } catch (e) {
         // Ignore JSON parsing errors
@@ -139,7 +147,9 @@ class GoogleFinanceStockProvider extends StockProvider {
     priceMatch = html.match(/<meta[^>]*property="[^"]*price[^"]*"[^>]*content="([0-9.,]+)"[^>]*>/i);
     if (priceMatch) {
       const price = this._parseNumber(priceMatch[1]);
-      return { price, ...this._extractAdditionalData(html) };
+      if (this._isReasonablePrice(price, symbol)) {
+        return { price, ...this._extractAdditionalData(html) };
+      }
     }
 
     // Strategy 6: Look for price near symbol mention

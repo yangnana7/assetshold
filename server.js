@@ -294,8 +294,16 @@ function initDatabase() {
       exchange TEXT,
       quantity REAL NOT NULL,
       avg_price_usd REAL NOT NULL,
+      market_price_usd REAL,
       FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
     )`);
+
+    // Ensure market_price_usd exists for older DBs
+    db.all('PRAGMA table_info(us_stocks)', (err, rows) => {
+      if (!err && rows && !rows.some(r => r.name === 'market_price_usd')) {
+        db.run('ALTER TABLE us_stocks ADD COLUMN market_price_usd REAL');
+      }
+    });
 
     // JP Stocks table
     db.run(`CREATE TABLE IF NOT EXISTS jp_stocks (

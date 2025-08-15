@@ -13,6 +13,8 @@ const csv = require('csv-parser');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const multer = require('multer');
 const { recalcBookValue } = require('./server/services/bookval');
+const Comps = require('./server/comps/service');
+const Rebalance = require('./server/rebalance/service');
 const { round2Floor } = require('./server/utils/number');
 const { fxKey, stockKey, metalKey } = require('./server/utils/keys');
 const { REQUIRED_PORT, validateRequiredPortOrExit, isMarketEnabled, getSessionSecretOrExit, CACHE_TTL } = require('./server/utils/config');
@@ -267,8 +269,16 @@ function initDatabase() {
       as_of TEXT NOT NULL,
       value_jpy INTEGER NOT NULL,
       fx_context TEXT,
+      unit_price_jpy REAL,
       FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
     )`);
+
+    // Ensure unit_price_jpy exists for older DBs
+    db.all('PRAGMA table_info(valuations)', (err, rows) => {
+      if (!err && rows && !rows.some(r => r.name === 'unit_price_jpy')) {
+        db.run('ALTER TABLE valuations ADD COLUMN unit_price_jpy REAL');
+      }
+    });
 
     // Price cache table for market data (BDD requirement 4.2)
     db.run(`CREATE TABLE IF NOT EXISTS price_cache (
@@ -340,6 +350,47 @@ function initDatabase() {
       currency TEXT NOT NULL DEFAULT 'JPY',
       balance REAL NOT NULL,
       FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    )`);
+
+    // Attachments table (files/links associated with assets)
+    db.run(`CREATE TABLE IF NOT EXISTS attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_id INTEGER NOT NULL,
+      filename TEXT,
+      url TEXT,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    )`);
+
+    // Comparable Sales table (BDD 2.5)
+    db.run(`CREATE TABLE IF NOT EXISTS comparable_sales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_id INTEGER NOT NULL,
+      sale_date TEXT NOT NULL,
+      price REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'JPY',
+      price_jpy REAL NOT NULL,
+      source TEXT,
+      source_url TEXT,
+      marketplace TEXT,
+      condition_grade TEXT,
+      completeness TEXT,
+      notes TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    )`);
+
+    // Settings and Target Allocations (BDD 2.4)
+    db.run(`CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`);
+    db.run(`CREATE TABLE IF NOT EXISTS target_allocations (
+      class TEXT PRIMARY KEY,
+      target_pct REAL NOT NULL
     )`);
 
     // Audit log table
@@ -2081,6 +2132,126 @@ app.get('/api/market/fx/:pair', async (req, res) => {
   }
 });
 
+// Comparable Sales API (list/add/update/delete, estimate & commit)
+app.get('/api/assets/:assetId/comps', requireAuth, async (req, res) => {
+  try {
+    const assetId = Number(req.params.assetId);
+    const comps = await Comps.listComps(db, assetId, 200);
+    res.json({ comps });
+  } catch (e) { res.status(500).json({ error: 'failed_to_list_comps' }); }
+});
+
+app.post('/api/assets/:assetId/comps', requireAdmin, async (req, res) => {
+  try {
+    const assetId = Number(req.params.assetId);
+    await Comps.addComp(db, assetId, req.body || {});
+    const comps = await Comps.listComps(db, assetId, 200);
+    res.json({ success: true, comps });
+  } catch (e) { res.status(400).json({ error: e.message || 'failed_to_add_comp' }); }
+});
+
+app.put('/api/comps/:id', requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await Comps.updateComp(db, id, req.body || {});
+    res.json({ success: true });
+  } catch (e) { res.status(400).json({ error: e.message || 'failed_to_update_comp' }); }
+});
+
+app.delete('/api/comps/:id', requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await Comps.deleteComp(db, id);
+    res.json({ success: true });
+  } catch (e) { res.status(400).json({ error: e.message || 'failed_to_delete_comp' }); }
+});
+
+app.get('/api/assets/:assetId/comps/estimate', requireAuth, async (req, res) => {
+  try {
+    const assetId = Number(req.params.assetId);
+    const method = (req.query.method || 'wmad');
+    const halfLife = Number(req.query.halfLifeDays || 90);
+    const est = await Comps.estimateFromComps(db, assetId, method, halfLife);
+    res.json(est);
+  } catch (e) { res.status(400).json({ error: e.message || 'failed_to_estimate' }); }
+});
+
+app.post('/api/assets/:assetId/comps/commit', requireAdmin, async (req, res) => {
+  try {
+    const assetId = Number(req.params.assetId);
+    const method = (req.body?.method || 'wmad');
+    const halfLife = Number(req.body?.halfLifeDays || 90);
+    const est = await Comps.estimateFromComps(db, assetId, method, halfLife);
+    await Comps.commitValuation(db, assetId, est);
+    res.json({ success: true, estimate: est });
+  } catch (e) { res.status(400).json({ error: e.message || 'failed_to_commit_estimate' }); }
+});
+
+// Rebalance API (targets, tolerance, current, plan)
+app.get('/api/rebalance/targets', requireAuth, async (req, res) => {
+  try {
+    const [targets, tol] = await Promise.all([
+      Rebalance.getTargets(db),
+      Rebalance.getTolerancePct(db)
+    ]);
+    res.json({ targets, tolerance_pct: tol });
+  } catch (e) { res.status(500).json({ error: 'failed_to_get_targets' }); }
+});
+
+app.post('/api/rebalance/targets', requireAdmin, async (req, res) => {
+  try {
+    const targets = Array.isArray(req.body?.targets) ? req.body.targets : [];
+    if (req.body?.tolerance_pct !== undefined) {
+      await Rebalance.setTolerancePct(db, Number(req.body.tolerance_pct));
+    }
+    if (targets.length) await Rebalance.setTargets(db, targets);
+    const [newTargets, tol] = await Promise.all([
+      Rebalance.getTargets(db),
+      Rebalance.getTolerancePct(db)
+    ]);
+    res.json({ success: true, targets: newTargets, tolerance_pct: tol });
+  } catch (e) { res.status(400).json({ error: e.message || 'failed_to_set_targets' }); }
+});
+
+app.get('/api/rebalance/plan', requireAuth, async (req, res) => {
+  try {
+    const to = (req.query.to || 'target'); // or 'mid'
+    const minTrade = Number(req.query.minTrade || 0);
+    const current = await Rebalance.getCurrentByClass(db, true);
+    const targets = await Rebalance.getTargets(db);
+    const tol = await Rebalance.getTolerancePct(db);
+    const plan = Rebalance.computePlanFromTargets(current, targets, tol, to, minTrade);
+    res.json({ current, targets, tolerance_pct: tol, plan });
+  } catch (e) { res.status(500).json({ error: 'failed_to_compute_plan' }); }
+});
+
+// Settings: backup toggle
+async function getSettingValue(key, defaultVal=null) {
+  return await new Promise((resolve) => {
+    db.get('SELECT value FROM settings WHERE key=?', [key], (err, row) => {
+      if (err || !row) return resolve(defaultVal);
+      resolve(row.value);
+    });
+  });
+}
+
+app.get('/api/settings/backup', requireAuth, async (req, res) => {
+  try {
+    const v = await getSettingValue('backup_enable', '1');
+    res.json({ backup_enable: v === '1' });
+  } catch { res.status(500).json({ error: 'failed_to_get_backup_setting' }); }
+});
+
+app.post('/api/settings/backup', requireAdmin, async (req, res) => {
+  try {
+    const enable = !!req.body?.enable;
+    db.run(`INSERT INTO settings(key,value) VALUES('backup_enable',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, [enable ? '1' : '0'], (err) => {
+      if (err) return res.status(500).json({ error: 'failed_to_update_backup_setting' });
+      res.json({ success: true, backup_enable: enable });
+    });
+  } catch { res.status(400).json({ error: 'bad_request' }); }
+});
+
 // Duplicate Detection and Management API endpoints
 
 // GET /api/duplicates - Find duplicate assets
@@ -2314,7 +2485,7 @@ function setupWalCheckpoints() {
 }
 
 // Backup database function
-function backupDatabase() {
+async function backupDatabase() {
   const backupDir = path.join(__dirname, 'backup');
   
   // Ensure backup directory exists
@@ -2327,6 +2498,11 @@ function backupDatabase() {
   const backupPath = path.join(backupDir, `portfolio_${timestamp}.db`);
   
   try {
+    const backupEnabled = await getSettingValue('backup_enable', '1');
+    if (backupEnabled !== '1') {
+      console.log('Database backup skipped (backup_enable=0)');
+      return;
+    }
     // Perform final checkpoint before backup
     db.run('PRAGMA wal_checkpoint(TRUNCATE)', (err) => {
       if (err) {

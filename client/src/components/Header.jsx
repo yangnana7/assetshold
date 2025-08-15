@@ -49,10 +49,31 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
               リバランス
             </button>
             <button
+              className={currentPage === 'rebalance-bdd' ? 'active' : ''}
+              onClick={() => onPageChange('rebalance-bdd')}
+              style={{ backgroundColor: currentPage === 'rebalance-bdd' ? '#28a745' : '#007bff' }}
+            >
+              リバランス(BDD)
+            </button>
+            <button
               className={currentPage === 'comps' ? 'active' : ''}
               onClick={() => onPageChange('comps')}
             >
               Comps
+            </button>
+            <button
+              className={currentPage === 'comps-bdd' ? 'active' : ''}
+              onClick={() => onPageChange('comps-bdd')}
+              style={{ backgroundColor: currentPage === 'comps-bdd' ? '#28a745' : '#007bff' }}
+            >
+              Comps(BDD)
+            </button>
+            <button
+              className={currentPage === 'ui-demo' ? 'active' : ''}
+              onClick={() => onPageChange('ui-demo')}
+              style={{ backgroundColor: currentPage === 'ui-demo' ? '#ffc107' : '#6c757d' }}
+            >
+              UI Demo
             </button>
           </nav>
         )}

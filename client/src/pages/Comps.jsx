@@ -1,12 +1,19 @@
 import React, { useEffect, useState } from 'react';
 
 export default function CompsPage() {
+  // BDD-compliant state management for 3-step wizard
   const [assetId, setAssetId] = useState('');
+  const [currentStep, setCurrentStep] = useState(1);
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({ sale_date:'', price:'', currency:'JPY', price_jpy:'', source:'', source_url:'', marketplace:'', condition_grade:'', completeness:'', notes:'' });
   const [estimate, setEstimate] = useState(null);
   const [halfLife, setHalfLife] = useState(90);
   const [method, setMethod] = useState('wmad');
+  const [url, setUrl] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [memo, setMemo] = useState('');
+  const [lastCommitted, setLastCommitted] = useState(null);
+  const [previewData, setPreviewData] = useState(null);
 
   async function load() {
     if (!assetId) return;

@@ -294,8 +294,16 @@ function initDatabase() {
       exchange TEXT,
       quantity REAL NOT NULL,
       avg_price_usd REAL NOT NULL,
+      market_price_usd REAL,
       FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
     )`);
+
+    // Ensure market_price_usd exists for older DBs
+    db.all('PRAGMA table_info(us_stocks)', (err, rows) => {
+      if (!err && rows && !rows.some(r => r.name === 'market_price_usd')) {
+        db.run('ALTER TABLE us_stocks ADD COLUMN market_price_usd REAL');
+      }
+    });
 
     // JP Stocks table
     db.run(`CREATE TABLE IF NOT EXISTS jp_stocks (
@@ -1902,12 +1910,15 @@ app.get('/api/export/full-database', requireAuth, (req, res) => {
     LEFT JOIN real_estates re ON a.id = re.asset_id
     LEFT JOIN collections c ON a.id = c.asset_id
     LEFT JOIN cashes ca ON a.id = ca.asset_id
-    LEFT JOIN valuations v ON v.id = (
-      SELECT vv.id FROM valuations vv 
-      WHERE vv.asset_id = a.id 
-      ORDER BY vv.as_of DESC, vv.id DESC 
-      LIMIT 1
-    )
+    LEFT JOIN (
+      SELECT vv.asset_id, vv.value_jpy, vv.as_of, vv.fx_context
+      FROM valuations vv
+      INNER JOIN (
+        SELECT asset_id, MAX(as_of) AS max_as_of
+        FROM valuations
+        GROUP BY asset_id
+      ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+    ) v ON v.asset_id = a.id
     ORDER BY a.class, a.name
   `;
   

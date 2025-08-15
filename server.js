@@ -963,6 +963,17 @@ app.get('/api/assets', (req, res) => {
                       }
                     }
                   }
+                  // 評価額（USD）と損益（USD）を付与
+                  const mpu = Number(asset.stock_details.market_price_usd || 0);
+                  if (mpu > 0) {
+                    const curTotalUsd = mpu * qty;
+                    const costTotalUsd = Number(asset.stock_details.avg_price_usd || 0) * qty;
+                    asset.stock_details.market_value_usd = Math.round(curTotalUsd * 100) / 100;
+                    asset.stock_details.cost_total_usd = Math.round(costTotalUsd * 100) / 100;
+                    const gl = curTotalUsd - costTotalUsd;
+                    asset.stock_details.gain_loss_usd = Math.round(gl * 100) / 100;
+                    asset.stock_details.gain_loss_pct_usd = costTotalUsd > 0 ? Math.round((gl / costTotalUsd) * 10000) / 100 : null;
+                  }
                 }
               } else {
                 // Fallback to legacy calculation

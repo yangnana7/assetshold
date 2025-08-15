@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import axios from 'axios'
-import { formatCurrency, formatDate, formatAssetName } from '../utils/format'
+import { formatCurrency, formatUsd, formatDate, formatAssetName } from '../utils/format'
 import AssetEditModal from '../components/AssetEditModal'
 import AssetCreateModal from '../components/AssetCreateModal'
 
@@ -513,7 +513,20 @@ function renderEvaluationDetails(asset) {
 }
 
 function renderEvaluationAmount(asset) {
-  if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+  if (asset.class === 'us_stock') {
+    const details = asset.stock_details;
+    if (details) {
+      const qty = Number(details.quantity || 0)
+      if (Number.isFinite(details.market_price_usd) && qty > 0) {
+        const totalUsd = details.market_price_usd * qty
+        return formatUsd(totalUsd)
+      }
+    }
+    // フォールバック: 円表示
+    return formatCurrency(asset.current_value_jpy || asset.book_value_jpy)
+  }
+
+  if (asset.class === 'jp_stock') {
     const details = asset.stock_details;
     if (details && details.evaluation !== undefined) {
       return formatCurrency(details.evaluation);

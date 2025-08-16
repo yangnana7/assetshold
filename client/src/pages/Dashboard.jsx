@@ -286,9 +286,9 @@ export default function Dashboard() {
                     }
 
                     const bookTotal = a.book_value_jpy || 0
-                    const currentTotal = a.current_value_jpy ?? (mUnitJpy != null && qty > 0 ? Math.floor(mUnitJpy * qty) : bookTotal)
-                    const pl = currentTotal - bookTotal
-                    const plPct = bookTotal > 0 ? (pl / bookTotal) * 100 : null
+                    const currentTotal = (a.current_value_jpy ?? (mUnitJpy != null && qty > 0 ? Math.floor(mUnitJpy * qty) : null))
+                    const pl = currentTotal != null ? (currentTotal - bookTotal) : 0
+                    const plPct = (currentTotal != null && bookTotal > 0) ? (pl / bookTotal) * 100 : null
 
                     const plClass = pl > 0 ? 'text-rose-600' : (pl < 0 ? 'text-emerald-600' : 'text-muted-foreground')
 
@@ -300,11 +300,11 @@ export default function Dashboard() {
                         <td className="py-2 pr-4 text-right font-mono whitespace-nowrap">
                           {cls === 'us_stock' ? (
                             <div className="flex flex-col items-end leading-tight">
-                              <span>{mUnitUsd != null ? formatUsd(mUnitUsd) : '-'}</span>
-                              <span className="text-xs text-muted-foreground">{mUnitJpy != null ? formatJPY(mUnitJpy) : '-'}</span>
+                              <span>{mUnitUsd != null ? formatUsd(mUnitUsd) : '時価取得失敗'}</span>
+                              <span className="text-xs text-muted-foreground">{mUnitJpy != null ? formatYenUnit(mUnitJpy) : '時価取得失敗'}</span>
                             </div>
                           ) : (
-                            <span>{mUnitJpy != null ? formatYenUnit(mUnitJpy) : '-'}</span>
+                            <span>{mUnitJpy != null ? formatYenUnit(mUnitJpy) : '時価取得失敗'}</span>
                           )}
                         </td>
                         <td className="py-2 pr-4 text-right font-mono whitespace-nowrap">
@@ -318,11 +318,11 @@ export default function Dashboard() {
                           )}
                         </td>
                         <td className="py-2 pr-4 text-right font-mono">{formatJPY(bookTotal)}</td>
-                        <td className="py-2 pr-4 text-right font-mono">{formatJPY(currentTotal)}</td>
+                        <td className="py-2 pr-4 text-right font-mono">{currentTotal != null ? formatJPY(currentTotal) : '時価取得失敗'}</td>
                         <td className={`py-2 pr-4 text-right font-mono ${plClass}`}>
                           <div className="flex flex-col items-end leading-tight">
-                            <span>{pl >= 0 ? '+' : ''}{formatJPY(pl)}</span>
-                            <span className="text-xs">{plPct != null ? `${plPct >= 0 ? '+' : ''}${plPct.toFixed(2)}%` : '-'}</span>
+                            <span>{currentTotal != null ? ((pl >= 0 ? '+' : '') + formatJPY(pl)) : '-'}</span>
+                            <span className="text-xs">{(currentTotal != null && plPct != null) ? `${plPct >= 0 ? '+' : ''}${plPct.toFixed(2)}%` : '-'}</span>
                           </div>
                         </td>
                         <td className="py-2 pr-4">{a.valuation_source || 'manual'}</td>

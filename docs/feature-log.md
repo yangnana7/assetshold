@@ -77,6 +77,12 @@
   - 対象: `client/src/pages/Dashboard.jsx`, `client/src/utils/format.js`
   - 追加フォーマッタ: `formatInt`（整数3桁区切り）、`formatManNumber`（円→万円・整数化）
 
+- マーケットデータ精度改善（日本株）
+  - Yahoo側失敗時に即モックへフォールバックしていた挙動を見直し、Google Financeを中間フォールバックに追加。
+  - 日本株の価格はYahoo取得時も小数部を保持（2桁丸め）するよう修正。
+  - 対象: `providers/yahoo.js`（GoogleFinanceStockProviderのフォールバック組み込み、JP価格の小数保持）
+  - モックフォールバックを撤廃。Yahoo/Google両方とも失敗時はAPIエラーを返し、フロントは「時価取得失敗」を表示（ダッシュボード資産一覧で対応）。
+
 - インポート/エクスポート 画面 UI 統一
   - UIキット（Card/Button/Input）にリファクタ。通知表示や見出し・文言を統一。
   - 対象: `client/src/pages/Import.jsx`

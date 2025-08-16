@@ -8,6 +8,7 @@ const OandaFxProvider = require('./fx/OandaFxProvider');
 const GoogleFinanceFxProvider = require('./fx/GoogleFinanceFxProvider');
 const MultiSourceFxProvider = require('./fx/MultiSourceFxProvider');
 const GoogleFinanceStockProvider = require('./stock/GoogleFinanceStockProvider');
+const CompositeStockProvider = require('./stock/CompositeStockProvider');
 
 function makeStockProvider(marketEnable = false) {
   if (!marketEnable) {
@@ -15,19 +16,9 @@ function makeStockProvider(marketEnable = false) {
     return new NoopProvider();
   }
 
-  // Priority: yahoo (more stable for US) -> google-finance (fallback) -> noop
-  try {
-    console.log('Stock provider: yahoo');
-    return new YahooStockProvider();
-  } catch (yahooError) {
-    try {
-      console.log('Stock provider: google-finance (fallback)');
-      return new GoogleFinanceStockProvider();
-    } catch (error) {
-      console.log('Stock provider: noop (all providers unavailable)');
-      return new NoopProvider();
-    }
-  }
+  // Use composite provider to increase accuracy (Yahoo + Google consensus)
+  console.log('Stock provider: composite (yahoo + google-finance)');
+  return new CompositeStockProvider();
 }
 
 function makeFxProvider(marketEnable = false) {

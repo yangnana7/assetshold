@@ -44,25 +44,25 @@ export default function AssetEditModalBDD({ asset, isOpen, onClose, onSave }) {
       switch (asset.class) {
         case 'us_stock':
           setClassFields({
-            ticker: asset.ticker || '',
-            exchange: asset.exchange || 'NYSE',
-            quantity: asset.quantity || 0,
-            avg_price_usd: asset.avg_price_usd || 0
+            ticker: asset.stock_details?.ticker || asset.ticker || '',
+            exchange: asset.stock_details?.exchange || asset.exchange || 'NYSE',
+            quantity: asset.stock_details?.quantity ?? asset.quantity ?? 0,
+            avg_price_usd: asset.stock_details?.avg_price_usd ?? asset.avg_price_usd ?? 0
           });
           break;
         case 'jp_stock':
           setClassFields({
-            code: asset.code || '',
-            quantity: asset.quantity || 0,
-            avg_price_jpy: asset.avg_price_jpy || 0
+            code: asset.stock_details?.code || asset.code || '',
+            quantity: asset.stock_details?.quantity ?? asset.quantity ?? 0,
+            avg_price_jpy: asset.stock_details?.avg_price_jpy ?? asset.avg_price_jpy ?? 0
           });
           break;
         case 'precious_metal':
           setClassFields({
-            metal: asset.metal || 'gold',
-            weight_g: asset.weight_g || 0,
-            purity: asset.purity || 0.9999,
-            unit_price_jpy: asset.unit_price_jpy || 0
+            metal: asset.precious_metal_details?.metal || asset.metal || 'gold',
+            weight_g: asset.precious_metal_details?.weight_g ?? asset.weight_g ?? 0,
+            purity: asset.precious_metal_details?.purity ?? asset.purity ?? 0.9999,
+            unit_price_jpy: asset.precious_metal_details?.unit_price_jpy ?? asset.unit_price_jpy ?? 0
           });
           break;
         case 'watch':
@@ -112,28 +112,29 @@ export default function AssetEditModalBDD({ asset, isOpen, onClose, onSave }) {
         // Class-specific fields
         ...classFields,
         // Recalculation mode
-        recalc_mode: recalcMode,
+        recalc: recalcMode,
         // Asset class
         class: asset.class
       };
 
       // Call unified PATCH API (BDD requirement: single transaction)
-      const response = await fetch(`/api/assets/${asset.id}`, {
+      // Use axios-like flow via fetch shim if needed; fall back-friendly
+      const res = await fetch(`/api/assets/${asset.id}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(payload)
       });
-
-      if (response.ok) {
-        const updatedAsset = await response.json();
-        onSave?.(updatedAsset);
-        onClose?.();
-      } else {
-        const error = await response.json();
-        alert(`保存に失敗しました: ${error.error || 'Unknown error'}`);
+      if (!res.ok) {
+        let errText = 'Unknown error';
+        try { const j = await res.json(); errText = j?.error || errText; } catch {}
+        alert(`保存に失敗しました: ${errText}`);
+        return;
       }
+      let updatedAsset = null;
+      try { updatedAsset = await res.json(); } catch { updatedAsset = null; }
+      onSave?.(updatedAsset);
+      onClose?.();
     } catch (error) {
       console.error('Failed to save asset:', error);
       alert('保存に失敗しました');

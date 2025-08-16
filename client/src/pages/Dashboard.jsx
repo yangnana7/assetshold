@@ -136,7 +136,7 @@ export default function Dashboard() {
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm">評価差額</CardTitle></CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold font-mono ${totals.diff>=0?'text-emerald-600':'text-rose-600'}`}>{(totals.diff>=0?'+':'') + formatJPY(totals.diff)}</div>
+            <div className={`text-2xl font-bold font-mono ${totals.diff>=0?'text-rose-600':'text-emerald-600'}`}>{(totals.diff>=0?'+':'') + formatJPY(totals.diff)}</div>
           </CardContent>
         </Card>
         <Card>

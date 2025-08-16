@@ -247,7 +247,7 @@ class DuplicateDetectionService {
    * @param {number} keepAssetId - ID of asset to keep as primary
    * @param {string} userId - User performing the merge
    */
-  async mergeDuplicates(assetIds, keepAssetId, userId) {
+  async mergeDuplicates(assetIds, keepAssetId, userId, mergePlan = {}) {
     return new Promise((resolve, reject) => {
       if (!assetIds.includes(keepAssetId)) {
         return reject(new Error('Keep asset ID must be in the list of assets to merge'));
@@ -256,101 +256,133 @@ class DuplicateDetectionService {
       this.db.serialize(() => {
         this.db.run('BEGIN TRANSACTION');
 
-        try {
-          // Get all assets to be merged
-          this.getAssetDetails(assetIds).then(assets => {
-            const keepAsset = assets.find(a => a.id === keepAssetId);
-            const mergeAssets = assets.filter(a => a.id !== keepAssetId);
+        // Get all assets to be merged
+        this.getAssetDetails(assetIds).then(assets => {
+          const keepAsset = assets.find(a => a.id === keepAssetId);
+          const mergeAssets = assets.filter(a => a.id !== keepAssetId);
 
-            // Combine notes from all assets
-            const combinedNotes = [];
-            if (keepAsset.note && keepAsset.note.trim()) {
-              combinedNotes.push(keepAsset.note.trim());
+          const choose = (field, fallback) => {
+            const fromId = mergePlan && mergePlan[field];
+            if (fromId) {
+              const src = assets.find(a => a.id === fromId);
+              if (src && src[field] !== undefined) return src[field];
             }
-            
-            mergeAssets.forEach(asset => {
-              if (asset.note && asset.note.trim() && !combinedNotes.includes(asset.note.trim())) {
-                combinedNotes.push(asset.note.trim());
+            return fallback;
+          };
+
+          // Build common field update
+          const name = choose('name', keepAsset.name);
+          const noteSelected = choose('note', keepAsset.note);
+          const acquired_at = choose('acquired_at', keepAsset.acquired_at);
+          const book_value_jpy = Number(choose('book_value_jpy', keepAsset.book_value_jpy)) || 0;
+          const valuation_source = choose('valuation_source', keepAsset.valuation_source || 'manual');
+          const liquidity_tier = choose('liquidity_tier', keepAsset.liquidity_tier || null);
+          const tags = choose('tags', keepAsset.tags || '');
+
+          this.db.run(
+            'UPDATE assets SET name=?, note=?, acquired_at=?, book_value_jpy=?, valuation_source=?, liquidity_tier=?, tags=?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [name, noteSelected || '', acquired_at || null, book_value_jpy, valuation_source, liquidity_tier, tags || '', keepAssetId],
+            (err) => {
+              if (err) {
+                this.db.run('ROLLBACK');
+                return reject(err);
               }
-            });
 
-            // Update the keep asset with combined information
-            const updatedNote = combinedNotes.join('; ');
-            this.db.run(
-              'UPDATE assets SET note = ?, updated_at = ? WHERE id = ?',
-              [updatedNote, new Date().toISOString(), keepAssetId],
-              (err) => {
-                if (err) {
-                  this.db.run('ROLLBACK');
-                  return reject(err);
-                }
-
-                // Transfer valuations from merged assets to keep asset
-                const mergeIds = mergeAssets.map(a => a.id);
-                if (mergeIds.length > 0) {
-                  const placeholders = mergeIds.map(() => '?').join(',');
+              // Class-specific tables
+              const cls = keepAsset.class;
+              const updateNext = (cb) => cb();
+              updateNext(() => {
+                if (cls === 'us_stock') {
+                  const ticker = choose('ticker', keepAsset.ticker);
+                  const exchange = choose('exchange', keepAsset.exchange);
+                  const quantity = Number(choose('us_quantity', keepAsset.us_quantity)) || 0;
+                  const avg_price_usd = choose('avg_price_usd', keepAsset.avg_price_usd);
                   this.db.run(
-                    `UPDATE valuations SET asset_id = ? WHERE asset_id IN (${placeholders})`,
-                    [keepAssetId, ...mergeIds],
+                    'UPDATE us_stocks SET ticker=?, exchange=?, quantity=?, avg_price_usd=? WHERE asset_id=?',
+                    [ticker || null, exchange || null, quantity, avg_price_usd != null ? Number(avg_price_usd) : null, keepAssetId],
                     (err) => {
-                      if (err) {
-                        this.db.run('ROLLBACK');
-                        return reject(err);
-                      }
-
-                      // Delete the merged assets
-                      this.db.run(
-                        `DELETE FROM assets WHERE id IN (${placeholders})`,
-                        mergeIds,
-                        (err) => {
-                          if (err) {
-                            this.db.run('ROLLBACK');
-                            return reject(err);
-                          }
-
-                          // Log audit trail
-                          const auditStmt = this.db.prepare(`
-                            INSERT INTO audit_log (table_name, record_id, action, old_values, new_values, user_id, source) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                          `);
-
-                          mergeAssets.forEach(asset => {
-                            auditStmt.run(
-                              'assets',
-                              asset.id,
-                              'MERGE_DUPLICATE',
-                              JSON.stringify(asset),
-                              JSON.stringify({ merged_into: keepAssetId }),
-                              userId,
-                              'duplicate_merge'
-                            );
-                          });
-
-                          auditStmt.finalize();
-
-                          this.db.run('COMMIT');
-                          resolve({
-                            success: true,
-                            kept_asset_id: keepAssetId,
-                            merged_asset_ids: mergeIds,
-                            combined_note: updatedNote
-                          });
-                        }
-                      );
+                      if (err) { this.db.run('ROLLBACK'); return reject(err); }
+                      proceed();
                     }
                   );
+                } else if (cls === 'jp_stock') {
+                  const code = choose('code', keepAsset.code);
+                  const quantity = Number(choose('jp_quantity', keepAsset.jp_quantity)) || 0;
+                  const avg_price_jpy = choose('avg_price_jpy', keepAsset.avg_price_jpy);
+                  this.db.run(
+                    'UPDATE jp_stocks SET code=?, quantity=?, avg_price_jpy=? WHERE asset_id=?',
+                    [code || null, quantity, avg_price_jpy != null ? Number(avg_price_jpy) : null, keepAssetId],
+                    (err) => {
+                      if (err) { this.db.run('ROLLBACK'); return reject(err); }
+                      proceed();
+                    }
+                  );
+                } else if (cls === 'precious_metal') {
+                  const metal = choose('metal', keepAsset.metal);
+                  const weight_g = Number(choose('weight_g', keepAsset.weight_g)) || 0;
+                  const purity = choose('purity', keepAsset.purity);
+                  const unit_price_jpy = choose('unit_price_jpy', keepAsset.unit_price_jpy);
+                  this.db.run(
+                    'UPDATE precious_metals SET metal=?, weight_g=?, purity=?, unit_price_jpy=? WHERE asset_id=?',
+                    [metal || null, weight_g, purity != null ? Number(purity) : null, unit_price_jpy != null ? Number(unit_price_jpy) : null, keepAssetId],
+                    (err) => {
+                      if (err) { this.db.run('ROLLBACK'); return reject(err); }
+                      proceed();
+                    }
+                  );
+                } else {
+                  proceed();
                 }
-              }
-            );
-          }).catch(err => {
-            this.db.run('ROLLBACK');
-            reject(err);
-          });
+              });
 
-        } catch (error) {
-          this.db.run('ROLLBACK');
-          reject(error);
-        }
+              function proceed() {
+                const mergeIds = mergeAssets.map(a => a.id);
+                if (mergeIds.length === 0) {
+                  return finalizeMerge(mergeIds);
+                }
+                const placeholders = mergeIds.map(() => '?').join(',');
+                // Transfer valuations to keep asset
+                const transfer = (sql, params=[]) => new Promise((res, rej)=>{
+                  // eslint-disable-next-line
+                  this.db.run(sql, params, (err)=> err?rej(err):res());
+                });
+
+                transfer(`UPDATE valuations SET asset_id = ? WHERE asset_id IN (${placeholders})`, [keepAssetId, ...mergeIds])
+                  .then(() => transfer(`DELETE FROM us_stocks WHERE asset_id IN (${placeholders})`, mergeIds))
+                  .then(() => transfer(`DELETE FROM jp_stocks WHERE asset_id IN (${placeholders})`, mergeIds))
+                  .then(() => transfer(`DELETE FROM precious_metals WHERE asset_id IN (${placeholders})`, mergeIds))
+                  .then(() => transfer(`DELETE FROM attachments WHERE asset_id IN (${placeholders})`, mergeIds).catch(()=>{}))
+                  .then(() => transfer(`DELETE FROM comparable_sales WHERE asset_id IN (${placeholders})`, mergeIds).catch(()=>{}))
+                  .then(() => transfer(`DELETE FROM assets WHERE id IN (${placeholders})`, mergeIds))
+                  .then(() => finalizeMerge(mergeIds))
+                  .catch(err => { this.db.run('ROLLBACK'); reject(err); });
+              }
+
+              const finalizeMerge = (mergeIds) => {
+                // Log audit trail
+                const auditStmt = this.db.prepare(`
+                  INSERT INTO audit_log (table_name, record_id, action, old_values, new_values, user_id, source) 
+                  VALUES (?, ?, ?, ?, ?, ?, ?)
+                `);
+                mergeAssets.forEach(asset => {
+                  auditStmt.run(
+                    'assets',
+                    asset.id,
+                    'MERGE_DUPLICATE',
+                    JSON.stringify(asset),
+                    JSON.stringify({ merged_into: keepAssetId, merge_plan: mergePlan }),
+                    userId,
+                    'duplicate_merge'
+                  );
+                });
+                auditStmt.finalize();
+
+                this.db.run('COMMIT');
+                resolve({ success: true, kept_asset_id: keepAssetId, merged_asset_ids: mergeIds });
+              };
+            }
+          );
+        }).catch(err => { this.db.run('ROLLBACK'); reject(err); });
       });
     });
   }

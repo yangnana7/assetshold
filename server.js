@@ -1651,6 +1651,42 @@ function insertClassSpecificData(record, assetId, callback) {
   }
 }
 
+// Duplicates API
+app.get('/api/duplicates', async (req, res) => {
+  try {
+    const groups = await duplicateService.findDuplicates();
+    res.json({ duplicate_groups: groups });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'failed_to_detect_duplicates' });
+  }
+});
+
+app.post('/api/duplicates/merge', async (req, res) => {
+  try {
+    const { asset_ids, keep_asset_id, merge_plan } = req.body || {};
+    if (!Array.isArray(asset_ids) || !keep_asset_id) {
+      return res.status(400).json({ error: 'invalid_parameters' });
+    }
+    const result = await duplicateService.mergeDuplicates(asset_ids, Number(keep_asset_id), req.user?.id || null, merge_plan || {});
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'merge_failed' });
+  }
+});
+
+app.post('/api/duplicates/ignore', async (req, res) => {
+  try {
+    const { asset_ids } = req.body || {};
+    if (!Array.isArray(asset_ids)) {
+      return res.status(400).json({ error: 'invalid_parameters' });
+    }
+    const result = await duplicateService.markAsNotDuplicates(asset_ids, req.user?.id || null);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'ignore_failed' });
+  }
+});
+
 // Import CSV validation
 const { validateHeaders, validateRow } = require('./server/csv/normalize');
 

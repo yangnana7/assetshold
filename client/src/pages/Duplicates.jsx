@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import DuplicateMergeModal from '@/components/DuplicateMergeModal';
 
 const Duplicates = () => {
   const { user } = useAuth();
@@ -7,6 +8,8 @@ const Duplicates = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [mergeGroup, setMergeGroup] = useState(null);
+  const [isMergeOpen, setIsMergeOpen] = useState(false);
 
   useEffect(() => {
     fetchDuplicates();
@@ -65,6 +68,11 @@ const Duplicates = () => {
       setProcessing(false);
     }
   };
+
+  const openMergeSelector = (group) => {
+    setMergeGroup(group);
+    setIsMergeOpen(true);
+  }
 
   const handleIgnore = async (assetIds) => {
     if (!confirm('この重複グループを無視しますか？今後の重複検出対象から除外されます。')) {
@@ -185,6 +193,13 @@ const Duplicates = () => {
                   {user?.role === 'admin' && (
                     <div className="flex space-x-2">
                       <button
+                        onClick={() => openMergeSelector(group)}
+                        disabled={processing}
+                        className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1 rounded disabled:opacity-50"
+                      >
+                        選択して統合
+                      </button>
+                      <button
                         onClick={() => handleIgnore(group.assets.map(a => a.id))}
                         disabled={processing}
                         className="bg-gray-500 hover:bg-gray-700 text-white text-sm px-3 py-1 rounded disabled:opacity-50"
@@ -254,6 +269,14 @@ const Duplicates = () => {
               </div>
             </div>
           ))}
+          {isMergeOpen && (
+            <DuplicateMergeModal
+              isOpen={isMergeOpen}
+              group={mergeGroup}
+              onClose={() => { setIsMergeOpen(false); setMergeGroup(null); }}
+              onMerged={() => { setIsMergeOpen(false); setMergeGroup(null); fetchDuplicates(); }}
+            />
+          )}
         </div>
       )}
     </div>

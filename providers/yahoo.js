@@ -1,6 +1,7 @@
 // Yahoo Finance provider for market data (BDD requirement 4.3)
 
 const { PricePoint, StockProvider, FxProvider } = require('./base');
+const GoogleFinanceStockProvider = require('./stock/GoogleFinanceStockProvider');
 
 class YahooStockProvider extends StockProvider {
   constructor() {
@@ -12,29 +13,26 @@ class YahooStockProvider extends StockProvider {
       if (exchange === 'JP') {
         // Fetch real data from Yahoo Finance Japan
         const realData = await this._fetchJapaneseStockPrice(ticker);
-        return new PricePoint(
-          realData.price,
-          'JPY',
-          new Date().toISOString()
-        );
+        return new PricePoint(realData.price, 'JPY', new Date().toISOString());
       } else {
         // For US stocks, fetch real data from Yahoo Finance US
         const realData = await this._fetchUSStockPrice(ticker);
-        return new PricePoint(
-          realData.price,
-          'USD',
-          new Date().toISOString()
-        );
+        return new PricePoint(realData.price, 'USD', new Date().toISOString());
       }
     } catch (error) {
       console.error(`Yahoo Stock API failed for ${ticker}.${exchange}:`, error.message);
-      // Fallback to mock data if API fails
-      const mockData = this._getMockStockData(ticker, exchange);
-      return new PricePoint(
-        mockData.price,
-        mockData.currency,
-        new Date().toISOString()
-      );
+      // Prefer Google Finance fallback
+      try {
+        const g = new GoogleFinanceStockProvider();
+        const alt = await g.getPrice(ticker, exchange === 'JP' ? 'TYO' : undefined);
+        if (alt && alt.price) {
+          return new PricePoint(alt.price, alt.currency || (exchange === 'JP' ? 'JPY' : 'USD'), alt.asOf || new Date().toISOString());
+        }
+      } catch (e2) {
+        console.warn(`Google Finance fallback failed for ${ticker}: ${e2.message}`);
+      }
+      // No mock fallback: signal upstream unavailable
+      throw new Error('quote_unavailable');
     }
   }
 
@@ -70,10 +68,9 @@ class YahooStockProvider extends StockProvider {
               throw new Error('Price data not available');
             }
             
-            resolve({
-              price: Math.round(currentPrice),
-              currency: 'JPY'
-            });
+            // Preserve decimals if present (some instruments trade with decimals)
+            const priceJpy = Math.round(currentPrice * 100) / 100;
+            resolve({ price: priceJpy, currency: 'JPY' });
           } catch (parseError) {
             reject(new Error(`Failed to parse Yahoo Finance data: ${parseError.message}`));
           }
@@ -123,10 +120,7 @@ class YahooStockProvider extends StockProvider {
               throw new Error('Price data not available');
             }
             
-            resolve({
-              price: Math.round(currentPrice * 100) / 100, // Round to 2 decimal places for USD
-              currency: 'USD'
-            });
+            resolve({ price: Math.round(currentPrice * 100) / 100, currency: 'USD' });
           } catch (parseError) {
             reject(new Error(`Failed to parse Yahoo Finance data: ${parseError.message}`));
           }

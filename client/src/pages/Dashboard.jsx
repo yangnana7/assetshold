@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button-simple'
 import { Badge } from '@/components/ui/badge-simple'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-import { formatAssetName, formatUsd, formatManNumber, formatInt } from '../utils/format'
+import { formatAssetName, formatUsd, formatManNumber, formatInt, formatYenUnit } from '../utils/format'
 import { Input } from '@/components/ui/input-simple'
 
 export default function Dashboard() {
@@ -304,17 +304,17 @@ export default function Dashboard() {
                               <span className="text-xs text-muted-foreground">{mUnitJpy != null ? formatJPY(mUnitJpy) : '-'}</span>
                             </div>
                           ) : (
-                            <span>{mUnitJpy != null ? formatJPY(mUnitJpy) : '-'}</span>
+                            <span>{mUnitJpy != null ? formatYenUnit(mUnitJpy) : '-'}</span>
                           )}
                         </td>
                         <td className="py-2 pr-4 text-right font-mono whitespace-nowrap">
                           {cls === 'us_stock' ? (
                             <div className="flex flex-col items-end leading-tight">
                               <span>{bUnitUsd != null ? formatUsd(bUnitUsd) : '-'}</span>
-                              <span className="text-xs text-muted-foreground">{bUnitJpy != null ? formatJPY(bUnitJpy) : '-'}</span>
+                              <span className="text-xs text-muted-foreground">{bUnitJpy != null ? formatYenUnit(bUnitJpy) : '-'}</span>
                             </div>
                           ) : (
-                            <span>{bUnitJpy != null ? formatJPY(bUnitJpy) : '-'}</span>
+                            <span>{bUnitJpy != null ? formatYenUnit(bUnitJpy) : '-'}</span>
                           )}
                         </td>
                         <td className="py-2 pr-4 text-right font-mono">{formatJPY(bookTotal)}</td>

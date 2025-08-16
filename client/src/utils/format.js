@@ -55,3 +55,14 @@ export function formatManNumber(amountJpy) {
   const man = Math.round((Number(amountJpy) || 0) / 10000)
   return formatInt(man)
 }
+
+// JPY unit price formatter (two decimals)
+export function formatYenUnit(amount) {
+  if (amount == null || isNaN(amount)) return '¥0.00'
+  return new Intl.NumberFormat('ja-JP', {
+    style: 'currency',
+    currency: 'JPY',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)
+}

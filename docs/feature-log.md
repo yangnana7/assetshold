@@ -55,6 +55,7 @@
   - オーバーレイクリックで閉じない（Xボタンのみ）。
   - タイトルの「（統一）」表記を削除。
   - 対象: `client/src/components/AssetCreateModal.jsx`
+  - 追補: 平均取得単価（JP株）の入力を小数点以下2桁対応（`step=0.01`）に統一。
 
 - ダッシュボード UI 改修
   - KPIカード: NAV/簿価総額/評価差額/資産数+USDJPY をカード表示。
@@ -70,6 +71,7 @@
     - 復活・整備。列を拡充（数量、時価単価、簿価単価、簿価総額、評価額、評価損益）。
     - 評価損益は総額＋％、色はプラス=赤/マイナス=緑。
     - US株は単価を USD/JPY の2段表示（取得時為替は考慮せず、現行USDJPYを使用）
+    - 単価表示は全資産で小数点以下2桁に統一（JPY単価は `formatYenUnit` で2桁）
     - 名称（備考）形式で表示。
     - 右上にフィルター（検索）を追加。名称/備考/クラスで部分一致（大文字小文字無視）。
   - 対象: `client/src/pages/Dashboard.jsx`, `client/src/utils/format.js`
@@ -88,6 +90,12 @@
 
 - 分岐/ブランチ
   - 作業用ブランチ: `feature/ui-create-modal-and-dashboard` を作成（コミットは未実施）。
+
+- 重複データ統合（項目選択型）
+  - 重複統合時に「保持対象」の選択に加え、フィールドごとにどの資産の値を採用するか選べるモーダルを追加。
+  - 対象フィールド: 共通（名称/備考/取得日/簿価/評価ソース/流動性/タグ）＋クラス別（US株: ティッカー/取引所/株数/平均USD、JP株: コード/株数/平均JPY、貴金属: 金属/重量/純度/単価）。
+  - API: 既存 `/api/duplicates/merge` に `merge_plan` を追加送信。サーバ側で該当フィールドを優先して統合（トランザクション）。
+  - 追加: `client/src/components/DuplicateMergeModal.jsx`、更新: `client/src/pages/Duplicates.jsx`, `server/duplicates/service.js`, `server.js`（API追加）
 
 ---
 

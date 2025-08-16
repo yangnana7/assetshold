@@ -45,7 +45,7 @@ function validateRow(row) {
   }
   
   // Valuation source validation
-  const validValuationSources = ['manual', 'market_api', 'formula'];
+  const validValuationSources = ['manual', 'market_api', 'market', 'formula'];
   if (row.valuation_source && !validValuationSources.includes(row.valuation_source)) {
     throw new Error(`valuation_source must be one of: ${validValuationSources.join(', ')}`);
   }

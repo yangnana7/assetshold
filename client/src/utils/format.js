@@ -39,3 +39,19 @@ export function formatAssetName(name, note) {
   
   return name
 }
+
+// Generic integer number formatter with grouping
+export function formatInt(amount) {
+  const n = Number(amount) || 0
+  return new Intl.NumberFormat('ja-JP', {
+    style: 'decimal',
+    maximumFractionDigits: 0,
+    useGrouping: true,
+  }).format(n)
+}
+
+// Convert JPY amount to man-yen (rounded) and format with grouping
+export function formatManNumber(amountJpy) {
+  const man = Math.round((Number(amountJpy) || 0) / 10000)
+  return formatInt(man)
+}

@@ -89,12 +89,12 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto m-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto m-4">
         <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Plus className="w-5 h-5" />
-            <h2 className="text-xl font-semibold">新規資産登録（統一）</h2>
+            <h2 className="text-xl font-semibold">新規資産登録</h2>
             {common.class && <Badge variant="outline">{common.class}</Badge>}
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -349,4 +349,3 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
     </div>
   )
 }
-

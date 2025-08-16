@@ -161,7 +161,7 @@ export default function AssetEditModalBDD({ asset, isOpen, onClose, onSave }) {
         <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Pencil className="w-5 h-5" />
-            <h2 className="text-xl font-semibold">資産編集（統一）</h2>
+            <h2 className="text-xl font-semibold">資産編集</h2>
             <Badge variant="outline">{asset.class}</Badge>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>

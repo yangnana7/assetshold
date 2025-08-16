@@ -242,7 +242,6 @@ export default function RebalanceBDDPage() {
           <SlidersHorizontal className="w-6 h-6" />
           <h1 className="text-2xl font-bold">配分調整（リバランス）</h1>
         </div>
-        <Badge variant="secondary" className="rounded-full">一般向けUI</Badge>
       </div>
 
       <StepIndicator currentStep={currentStep} />

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button-simple'
 import { Badge } from '@/components/ui/badge-simple'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 import { formatAssetName, formatUsd, formatManNumber, formatInt } from '../utils/format'
+import { Input } from '@/components/ui/input-simple'
 
 export default function Dashboard() {
   const [data, setData] = useState(null)
@@ -22,6 +23,7 @@ export default function Dashboard() {
   const [totalPages, setTotalPages] = useState(1)
   const [totalAssetCount, setTotalAssetCount] = useState(0)
   const ASSETS_PER_PAGE = 30
+  const [filter, setFilter] = useState('')
 
   useEffect(() => {
     ;(async () => {
@@ -89,6 +91,17 @@ export default function Dashboard() {
     }))
     return list
   }, [data])
+
+  const filteredAssets = useMemo(() => {
+    const q = (filter || '').trim().toLowerCase()
+    if (!q) return assets
+    return assets.filter(a => {
+      const name = (a.name || '').toLowerCase()
+      const note = (a.note || '').toLowerCase()
+      const cls = getAssetClassName(a.class || '').toLowerCase()
+      return name.includes(q) || note.includes(q) || cls.includes(q)
+    })
+  }, [assets, filter])
 
   const lineData = useMemo(() => {
     const trend = (data?.monthlyTrend || []).slice().sort((a,b)=> (a.month > b.month ? 1 : -1))
@@ -210,8 +223,21 @@ export default function Dashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>資産一覧</CardTitle>
-          <CardDescription>全{totalAssetCount}件のうち {Math.min((currentPage-1)*ASSETS_PER_PAGE+1, totalAssetCount)}-{Math.min(currentPage*ASSETS_PER_PAGE, totalAssetCount)}を表示</CardDescription>
+          <div className="flex w-full items-center justify-between">
+            <div>
+              <CardTitle>資産一覧</CardTitle>
+              <CardDescription>
+                全{totalAssetCount}件 / フィルタ後 {filteredAssets.length}件
+              </CardDescription>
+            </div>
+            <div className="w-64">
+              <Input
+                placeholder="検索（名称・備考・クラス）"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {assetsLoading ? (
@@ -235,7 +261,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {assets.map((a) => {
+                  {filteredAssets.map((a) => {
                     const cls = a.class
                     const qty = cls === 'us_stock' || cls === 'jp_stock'
                       ? (a.stock_details?.quantity ?? a.quantity ?? 0)

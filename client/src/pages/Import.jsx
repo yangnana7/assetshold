@@ -1,5 +1,8 @@
 import React, { useState } from 'react'
 import axios from 'axios'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card-simple'
+import { Button } from '@/components/ui/button-simple'
+import { Input } from '@/components/ui/input-simple'
 
 function ImportExport() {
   const [selectedFile, setSelectedFile] = useState(null)
@@ -116,144 +119,116 @@ function ImportExport() {
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h2>インポート・エクスポート</h2>
-      
-      <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
-        <h3>CSVファイルのインポート</h3>
-        
-        <div style={{ marginBottom: '2rem' }}>
-          <p>資産データをCSVファイルから一括でインポートできます。</p>
-          <p>既存の資産と同じ名前・クラスの場合は更新され、新しい資産は追加されます。</p>
-        </div>
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">インポート・エクスポート</h1>
+      </div>
 
-        <div className="form-group">
-          <label htmlFor="csvFile">CSVファイルを選択</label>
-          <input
-            type="file"
-            id="csvFile"
-            accept=".csv,text/csv"
-            onChange={handleFileChange}
-            disabled={uploading}
-          />
-          {selectedFile && (
-            <p style={{ marginTop: '0.5rem', color: '#28a745' }}>
-              選択されたファイル: {selectedFile.name}
-            </p>
-          )}
-        </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>CSVインポート</CardTitle>
+          <CardDescription>資産データをCSVから一括登録・更新します</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="text-sm text-muted-foreground">
+            既存の資産と同じ「名称＋クラス」は更新、新規は追加されます。
+          </div>
 
-        <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-          <button
-            className="btn btn-primary"
-            onClick={handleUpload}
-            disabled={!selectedFile || uploading}
-          >
-            {uploading ? 'インポート中...' : 'インポート実行'}
-          </button>
-          
-          <button
-            className="btn"
-            onClick={downloadTemplate}
-            disabled={uploading}
-          >
-            テンプレートダウンロード
-          </button>
-        </div>
-
-        {message && (
-          <div className="success">
-            {message}
-            {importResult && (
-              <div style={{ marginTop: '1rem' }}>
-                <strong>処理結果:</strong>
-                <ul style={{ marginTop: '0.5rem', marginLeft: '1rem' }}>
-                  <li>総件数: {importResult.total}件</li>
-                  <li>新規追加: {importResult.inserted}件</li>
-                  <li>更新: {importResult.updated}件</li>
-                </ul>
-              </div>
+          <div className="space-y-2">
+            <label htmlFor="csvFile" className="text-sm font-medium">CSVファイルを選択</label>
+            <Input id="csvFile" type="file" accept=".csv,text/csv" onChange={handleFileChange} disabled={uploading} />
+            {selectedFile && (
+              <div className="text-xs text-emerald-600">選択されたファイル: {selectedFile.name}</div>
             )}
           </div>
-        )}
 
-        {error && (
-          <div className="error" style={{ whiteSpace: 'pre-line' }}>
-            {error}
+          <div className="flex gap-2">
+            <Button onClick={handleUpload} disabled={!selectedFile || uploading}>
+              {uploading ? 'インポート中...' : 'インポート実行'}
+            </Button>
+            <Button variant="outline" onClick={downloadTemplate} disabled={uploading}>テンプレートダウンロード</Button>
           </div>
-        )}
-      </div>
 
-      <div className="card" style={{ maxWidth: '800px', margin: '2rem auto 0' }}>
-        <h3>CSVファイル仕様</h3>
-        
-        <div style={{ marginBottom: '1rem' }}>
-          <h4>必須カラム:</h4>
-          <ul>
-            <li><strong>class</strong>: アセットクラス (us_stock, jp_stock, watch, precious_metal, real_estate, collection, cash)</li>
-            <li><strong>name</strong>: 資産名</li>
-            <li><strong>book_value_jpy</strong>: 簿価（円）</li>
-            <li><strong>liquidity_tier</strong>: 流動性階層 (L1, L2, L3, L4)</li>
-          </ul>
-        </div>
+          {message && (
+            <div className="text-sm border rounded p-3 bg-green-50 border-green-200">
+              <div>{message}</div>
+              {importResult && (
+                <div className="mt-2 text-sm">
+                  <div className="font-medium">処理結果</div>
+                  <ul className="list-disc pl-5 mt-1">
+                    <li>総件数: {importResult.total}件</li>
+                    <li>新規追加: {importResult.inserted}件</li>
+                    <li>更新: {importResult.updated}件</li>
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
-        <div style={{ marginBottom: '1rem' }}>
-          <h4>オプションカラム:</h4>
-          <ul>
-            <li><strong>note</strong>: 備考</li>
-            <li><strong>acquired_at</strong>: 取得日 (YYYY-MM-DD形式)</li>
-            <li><strong>valuation_source</strong>: 評価方法 (manual, market_api, formula)</li>
-            <li><strong>tags</strong>: タグ (JSON形式)</li>
-          </ul>
-        </div>
+          {error && (
+            <div className="text-sm border rounded p-3 bg-rose-50 border-rose-200 whitespace-pre-line">
+              {error}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-        <div>
-          <h4>サンプル:</h4>
-          <pre style={{ 
-            background: '#f8f9fa', 
-            padding: '1rem', 
-            borderRadius: '4px', 
-            fontSize: '0.875rem',
-            overflow: 'auto'
-          }}>
-{`class,name,note,acquired_at,book_value_jpy,valuation_source,liquidity_tier,tags
+      <Card>
+        <CardHeader>
+          <CardTitle>CSVファイル仕様</CardTitle>
+          <CardDescription>カラム仕様とサンプル</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <div className="font-medium text-sm mb-1">必須カラム</div>
+            <ul className="list-disc pl-5 text-sm text-muted-foreground">
+              <li><span className="font-medium text-foreground">class</span>: アセットクラス (us_stock, jp_stock, watch, precious_metal, real_estate, collection, cash)</li>
+              <li><span className="font-medium text-foreground">name</span>: 資産名</li>
+              <li><span className="font-medium text-foreground">book_value_jpy</span>: 簿価（円）</li>
+              <li><span className="font-medium text-foreground">liquidity_tier</span>: 流動性階層 (L1, L2, L3, L4)</li>
+            </ul>
+          </div>
+
+          <div>
+            <div className="font-medium text-sm mb-1">オプションカラム</div>
+            <ul className="list-disc pl-5 text-sm text-muted-foreground">
+              <li><span className="font-medium text-foreground">note</span>: 備考</li>
+              <li><span className="font-medium text-foreground">acquired_at</span>: 取得日 (YYYY-MM-DD)</li>
+              <li><span className="font-medium text-foreground">valuation_source</span>: 評価方法 (manual, market_api, formula)</li>
+              <li><span className="font-medium text-foreground">tags</span>: タグ (JSON)</li>
+            </ul>
+          </div>
+
+          <div>
+            <div className="font-medium text-sm mb-2">サンプル</div>
+            <pre className="bg-muted rounded p-3 text-xs overflow-auto">{`class,name,note,acquired_at,book_value_jpy,valuation_source,liquidity_tier,tags
 us_stock,Alphabet C,GOOGL,2024-06-15,405600,manual,L2,"{""ticker"": ""GOOGL""}"
 watch,Kudoke 2 Indigo,,2024-12-01,850000,manual,L3,"{""brand"": ""Kudoke""}"
-precious_metal,純金小判,50g,2025-01-15,268000,manual,L3,"{""metal"": ""gold""}"`}
-          </pre>
-        </div>
-      </div>
-
-      <div className="card" style={{ maxWidth: '800px', margin: '2rem auto 0' }}>
-        <h3>データベース一括エクスポート</h3>
-        
-        <div style={{ marginBottom: '2rem' }}>
-          <p>データベース内の全データをCSV形式でダウンロードできます。</p>
-          <p>全ての資産情報、詳細データ、評価履歴が含まれます。</p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-          <button
-            className="btn btn-primary"
-            onClick={downloadFullDatabase}
-            disabled={uploading}
-          >
-            データベース全体をダウンロード
-          </button>
-        </div>
-
-        {message && (
-          <div className="success">
-            {message}
+precious_metal,純金小判,50g,2025-01-15,268000,manual,L3,"{""metal"": ""gold""}"`}</pre>
           </div>
-        )}
+        </CardContent>
+      </Card>
 
-        {error && (
-          <div className="error" style={{ whiteSpace: 'pre-line' }}>
-            {error}
+      <Card>
+        <CardHeader>
+          <CardTitle>一括エクスポート</CardTitle>
+          <CardDescription>データベース内の全データをCSVでダウンロード</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="text-sm text-muted-foreground">
+            全ての資産情報、詳細データ、評価履歴が含まれます。
           </div>
-        )}
-      </div>
+          <div>
+            <Button onClick={downloadFullDatabase} disabled={uploading}>データベース全体をダウンロード</Button>
+          </div>
+          {message && (
+            <div className="text-sm border rounded p-3 bg-green-50 border-green-200">{message}</div>
+          )}
+          {error && (
+            <div className="text-sm border rounded p-3 bg-rose-50 border-rose-200 whitespace-pre-line">{error}</div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

@@ -19,37 +19,34 @@ class TanakaPreciousMetalProvider extends StockProvider {
             goldData.as_of
           );
         } catch (fetchError) {
-          console.error('Tanaka real data fetch failed, using fallback:', fetchError.message);
-          // Fall back to static data
+          console.error('Tanaka real data fetch failed:', fetchError.message);
+          // Fall back to Mitsubishi Materials public price
+          try {
+            const { getMitsubishiJPYPerGram } = require('./metal/MitsubishiProvider');
+            const mm = await getMitsubishiJPYPerGram('gold');
+            return new PricePoint(mm.price_jpy_per_g, 'JPY', mm.as_of);
+          } catch (mmError) {
+            console.error('Mitsubishi fallback failed:', mmError.message);
+            throw mmError;
+          }
         }
       }
       
-      // Fallback to static data for other metals or when real fetch fails
-      const priceData = this._getTanakaPriceData(metal);
-      
-      return new PricePoint(
-        priceData.price,
-        'JPY',
-        new Date().toISOString()
-      );
+      // For other metals, try Mitsubishi first
+      try {
+        const { getMitsubishiJPYPerGram } = require('./metal/MitsubishiProvider');
+        const mm = await getMitsubishiJPYPerGram(metal);
+        return new PricePoint(mm.price_jpy_per_g, 'JPY', mm.as_of);
+      } catch (mmError) {
+        console.error('Mitsubishi metal fetch failed:', mmError.message);
+        throw mmError;
+      }
     } catch (error) {
       throw new Error(`Tanaka Precious Metal API failed: ${error.message}`);
     }
   }
 
-  _getTanakaPriceData(metal) {
-    // Store purchase prices (税込) from Tanaka Kikinzoku website
-    // Prices per gram in JPY (tax included)
-    const tanakaSpotPrices = {
-      'gold': { price: 17752, currency: 'JPY' },
-      'platinum': { price: 7033, currency: 'JPY' },
-      'silver': { price: 202.29, currency: 'JPY' },
-      'palladium': { price: 6500, currency: 'JPY' } // Estimated price
-    };
-
-    const metalKey = metal.toLowerCase();
-    return tanakaSpotPrices[metalKey] || { price: 1000.0, currency: 'JPY' };
-  }
+  _getTanakaPriceData(metal) { return { price: NaN, currency: 'JPY' }; }
 
   async fetchLiveData() {
     // Future implementation for live data fetching

@@ -1183,6 +1183,15 @@ app.get('/api/assets', async (req, res) => {
                     asset.ui_market_unit_currency = 'JPY';
                     asset.ui_market_unit_price_label = `${formatted} / g`;
                   }
+                  // Generic structured aliases
+                  const unitUsdForMarket = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
+                  asset.market = {
+                    unit_price_jpy: valuation.unit_price_jpy,
+                    unit_price_usd: unitUsdForMarket,
+                    currency: 'JPY'
+                  };
+                  asset.details = Object.assign({}, asset.details, { unit_price_jpy: valuation.unit_price_jpy });
+                  asset.market_unit_available = true;
                   // USD compatibility for UIs that expect USD column
                   const unitUsdRoot = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
                   if (unitUsdRoot) {

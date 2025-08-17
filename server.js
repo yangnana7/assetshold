@@ -949,6 +949,8 @@ app.delete('/api/users/:id', requireAdmin, (req, res) => {
 
 // Assets CRUD routes with current valuation
 app.get('/api/assets', async (req, res) => {
+  // helper: tolerant JSON parse
+  const safeParseJson = (s) => { try { return JSON.parse(s); } catch (_) { return null; } };
   const { class: assetClass, page = '1', limit = '30' } = req.query;
   // 現在のUSDJPYレート（キャッシュ利用）。失敗時は1で継続
   let usdJpyRate = 1;
@@ -1055,26 +1057,22 @@ app.get('/api/assets', async (req, res) => {
                 if (asset.class === 'us_stock' && asset.stock_details) {
                   const qty = Number(asset.stock_details.quantity || 0);
                   if (qty > 0 && (!asset.stock_details.market_price_usd || Number.isNaN(Number(asset.stock_details.market_price_usd)))) {
-                    let rate = null;
-                    // Prefer JSON fx_context
-                    try {
-                      const fx = valuation.fx_context ? JSON.parse(valuation.fx_context) : null;
-                      if (fx && typeof fx.rate === 'number') rate = fx.rate;
-                    } catch (_) {}
-                    if (!rate) {
-                      const m = (valuation.fx_context || '').match(/USDJPY@([0-9.]+)/);
-                      rate = m ? parseFloat(m[1]) : null;
+                    // v3 hotfix policy:
+                    // 1) Trust unit_price_jpy only when fx_context JSON exists with pair USDJPY and valid rate
+                    // 2) Else prefer committed us_stocks.market_price_usd
+                    // 3) Else fallback to value_jpy / (qty * rateFromCtx)
+                    const ctx = safeParseJson(valuation.fx_context);
+                    const rateFromCtx = (ctx && ctx.pair === 'USDJPY' && Number(ctx.rate) > 0) ? Number(ctx.rate) : null;
+                    let unitUsd = null;
+                    if (valuation.unit_price_jpy && rateFromCtx) {
+                      unitUsd = valuation.unit_price_jpy / rateFromCtx;
+                    } else if (Number(asset.stock_details.market_price_usd) > 0) {
+                      unitUsd = Number(asset.stock_details.market_price_usd);
+                    } else if (valuation.value_jpy && qty > 0 && rateFromCtx) {
+                      unitUsd = valuation.value_jpy / (qty * rateFromCtx);
                     }
-                    if (rate && rate > 0) {
-                      let unitUsd = null;
-                      if (valuation.unit_price_jpy) {
-                        unitUsd = valuation.unit_price_jpy / rate;
-                      } else if (valuation.value_jpy) {
-                        unitUsd = valuation.value_jpy / (qty * rate);
-                      }
-                      if (Number.isFinite(unitUsd) && unitUsd > 0) {
-                        asset.stock_details.market_price_usd = Math.round(unitUsd * 100) / 100;
-                      }
+                    if (Number.isFinite(unitUsd) && unitUsd > 0) {
+                      asset.stock_details.market_price_usd = Math.round(unitUsd * 100) / 100;
                     }
                   }
                   // 評価額（USD）と損益（USD）を付与

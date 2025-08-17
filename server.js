@@ -1167,6 +1167,10 @@ app.get('/api/assets', async (req, res) => {
                   // Generic keys for UI compatibility
                   asset.market_unit_price = valuation.unit_price_jpy;
                   asset.market_unit_currency = 'JPY';
+                  // Root-level aliases some UI variants may expect
+                  asset.unit_price_jpy = valuation.unit_price_jpy;
+                  asset.unit_price = valuation.unit_price_jpy;
+                  asset.unit_currency = 'JPY';
                 }
                 if (valuation.value_jpy) {
                   // Use actual market valuation if available
@@ -1279,6 +1283,9 @@ app.get('/api/assets/:id', async (req, res) => {
               }
               asset.market_unit_price = valuation.unit_price_jpy;
               asset.market_unit_currency = 'JPY';
+              asset.unit_price_jpy = valuation.unit_price_jpy;
+              asset.unit_price = valuation.unit_price_jpy;
+              asset.unit_currency = 'JPY';
             }
             if (valuation.value_jpy) {
               // Use actual market valuation if available

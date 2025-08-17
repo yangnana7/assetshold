@@ -1,0 +1,80 @@
+{
+  "version": "20250817_1806",
+  "tickers": [
+    {
+      "canonical": "ORCL",
+      "exchange": "NYSE",
+      "aliases": [
+        "ORCL",
+        "ORACLE"
+      ],
+      "yahoo_key": "ORCL",
+      "google_key": "ORCL:NYSE",
+      "marketwatch_key": "orcl"
+    },
+    {
+      "canonical": "AAPL",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "AAPL"
+      ],
+      "yahoo_key": "AAPL",
+      "google_key": "AAPL:NASDAQ",
+      "marketwatch_key": "aapl"
+    },
+    {
+      "canonical": "MSFT",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "MSFT"
+      ],
+      "yahoo_key": "MSFT",
+      "google_key": "MSFT:NASDAQ",
+      "marketwatch_key": "msft"
+    },
+    {
+      "canonical": "GOOGL",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "GOOGL",
+        "GOOGLE A"
+      ],
+      "yahoo_key": "GOOGL",
+      "google_key": "GOOGL:NASDAQ",
+      "marketwatch_key": "googl"
+    },
+    {
+      "canonical": "GOOG",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "GOOG",
+        "GOOGLE C"
+      ],
+      "yahoo_key": "GOOG",
+      "google_key": "GOOG:NASDAQ",
+      "marketwatch_key": "goog"
+    },
+    {
+      "canonical": "BRK.B",
+      "exchange": "NYSE",
+      "aliases": [
+        "BRK.B",
+        "BRK-B"
+      ],
+      "yahoo_key": "BRK-B",
+      "google_key": "BRK.B:NYSE",
+      "marketwatch_key": "brk-b"
+    },
+    {
+      "canonical": "BF.B",
+      "exchange": "NYSE",
+      "aliases": [
+        "BF.B",
+        "BF-B"
+      ],
+      "yahoo_key": "BF-B",
+      "google_key": "BF.B:NYSE",
+      "marketwatch_key": "bf-b"
+    }
+  ]
+}

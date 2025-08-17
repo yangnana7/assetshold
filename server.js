@@ -34,7 +34,9 @@ if (!MARKET_ENABLE) {
 const app = express();
 
 // Database initialization
-const dbPath = path.join(__dirname, 'data', 'portfolio.db');
+const dataDir = path.join(__dirname, 'data');
+try { if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true }); } catch (e) { console.error('Failed to ensure data dir:', e.message); }
+const dbPath = path.join(dataDir, 'portfolio.db');
 const db = new sqlite3.Database(dbPath);
 
 // Enable WAL mode for better concurrency and reliability
@@ -118,6 +120,18 @@ const duplicateService = new DuplicateDetectionService(db);
 // Centralized cache helpers (DRY)
 const { createCache } = require('./server/utils/cache');
 const { getCachedPrice, setCachedPrice, fetchWithCache } = createCache(db);
+// Inject commonly used services for route handlers (hotfix refresh commit)
+app.set('db', db);
+app.set('fxProvider', fxProvider);
+app.set('CACHE_TTL', CACHE_TTL);
+app.set('fetchWithCache', fetchWithCache);
+app.set('dataDir', dataDir);
+app.set('dbPath', dbPath);
+
+// Debug routes (server debug patch)
+const debugRoutes = require('./src/routes/debug.tools');
+app.get('/api/debug/version', debugRoutes.version);
+app.get('/api/debug/asset/:assetId', debugRoutes.assetTrace);
 
 // Function to calculate current market value for assets
 function calculateCurrentValue(asset) {
@@ -144,7 +158,7 @@ function roundDown2(x) {
   return Math.floor(x * 100) / 100;
 }
 
-async function calculateMarketValue(asset) {
+  async function calculateMarketValue(asset) {
   const assetClass = asset.class;
   
   try {
@@ -163,8 +177,11 @@ async function calculateMarketValue(asset) {
         () => fxProvider.getRate('USDJPY')
       );
       
-      const valueJpy = round2Floor(priceData.price * quantity * fxData.price);
-      const fxContext = `USDJPY@${fxData.price}(${fxData.asOf})`;
+      const unitPriceUsd = Number(priceData.price);
+      const rate = Number(fxData.price);
+      const unitPriceJpy = roundDown2(unitPriceUsd * rate);
+      const valueJpy = round2Floor(unitPriceUsd * quantity * rate);
+      const fxContext = JSON.stringify({ pair: 'USDJPY', rate, as_of: fxData.asOf });
       
       // Update us_stocks table with current market price in USD
       try {
@@ -184,10 +201,11 @@ async function calculateMarketValue(asset) {
       
       return {
         value_jpy: Math.floor(valueJpy),
+        unit_price_jpy: unitPriceJpy,
         as_of: priceData.asOf,
         fx_context: fxContext,
         stale: priceData.stale || fxData.stale,
-        market_price_usd: priceData.price // Include USD price in response
+        market_price_usd: unitPriceUsd // Include USD price in response
       };
     }
     
@@ -199,10 +217,12 @@ async function calculateMarketValue(asset) {
         () => stockProvider.getQuote(code, 'JP')
       );
       
-      const valueJpy = round2Floor(priceData.price * quantity);
+      const unitPriceJpy = roundDown2(Number(priceData.price));
+      const valueJpy = round2Floor(unitPriceJpy * quantity);
       
       return {
         value_jpy: Math.floor(valueJpy),
+        unit_price_jpy: unitPriceJpy,
         as_of: priceData.asOf,
         fx_context: null,
         stale: priceData.stale
@@ -585,7 +605,16 @@ app.get('/api/user', (req, res) => {
 });
 
 // Dashboard route (accessible to all)
-app.get('/api/dashboard', (req, res) => {
+app.get('/api/dashboard', async (req, res) => {
+  // 現在のUSDJPYレート（キャッシュ利用）を取得。失敗時は1でフォールバック
+  let usdJpyRate = 1;
+  try {
+    const fx = await fetchWithCache(fxKey('USDJPY'), CACHE_TTL.fx, () => fxProvider.getRate('USDJPY'));
+    usdJpyRate = Number(fx.price) || 1;
+  } catch (e) {
+    console.warn('FX fetch failed for dashboard; using 1 as fallback:', e.message);
+  }
+
   const queries = {
     totalAssets: `SELECT COUNT(*) as count FROM assets`,
     totalValue: `
@@ -634,8 +663,20 @@ app.get('/api/dashboard', (req, res) => {
       SELECT 
         strftime('%Y-%m', a.created_at) as month,
         SUM(a.book_value_jpy) as book_value_total,
-        SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as market_value_total
+        SUM(
+          COALESCE(v.value_jpy,
+            CASE 
+              WHEN a.class='us_stock' THEN COALESCE(us.avg_price_usd,0)*COALESCE(us.quantity,0)*?
+              WHEN a.class='jp_stock' THEN COALESCE(jp.avg_price_jpy,0)*COALESCE(jp.quantity,0)
+              WHEN a.class='precious_metal' THEN COALESCE(pm.unit_price_jpy,0)*COALESCE(pm.weight_g,0)
+              ELSE a.book_value_jpy
+            END
+          )
+        ) as market_value_total
       FROM assets a
+      LEFT JOIN us_stocks us ON us.asset_id = a.id
+      LEFT JOIN jp_stocks jp ON jp.asset_id = a.id
+      LEFT JOIN precious_metals pm ON pm.asset_id = a.id
       LEFT JOIN (
         SELECT vv.asset_id, vv.value_jpy
         FROM valuations vv
@@ -657,7 +698,8 @@ app.get('/api/dashboard', (req, res) => {
   const total = Object.keys(queries).length;
   
   Object.entries(queries).forEach(([key, query]) => {
-    db.all(query, (err, rows) => {
+    const params = key === 'monthlyTrend' ? [usdJpyRate] : [];
+    db.all(query, params, (err, rows) => {
       if (!err) {
         results[key] = rows;
       }
@@ -671,7 +713,16 @@ app.get('/api/dashboard', (req, res) => {
 });
 
 // Dashboard class summary route - book value vs market value comparison by asset class
-app.get('/api/dashboard/class-summary', (req, res) => {
+app.get('/api/dashboard/class-summary', async (req, res) => {
+  // 現在のUSDJPYレート（キャッシュ利用）
+  let usdJpyRate = 1;
+  try {
+    const fx = await fetchWithCache(fxKey('USDJPY'), CACHE_TTL.fx, () => fxProvider.getRate('USDJPY'));
+    usdJpyRate = Number(fx.price) || 1;
+  } catch (e) {
+    console.warn('FX fetch failed for class-summary; using 1 as fallback:', e.message);
+  }
+
   const query = `
     SELECT
       a.class AS class,
@@ -683,16 +734,24 @@ app.get('/api/dashboard/class-summary', (req, res) => {
            WHERE v.asset_id = a.id
            ORDER BY v.as_of DESC, v.id DESC
            LIMIT 1),
-          a.book_value_jpy
+          CASE 
+            WHEN a.class='us_stock' THEN COALESCE(us.avg_price_usd,0)*COALESCE(us.quantity,0)*?
+            WHEN a.class='jp_stock' THEN COALESCE(jp.avg_price_jpy,0)*COALESCE(jp.quantity,0)
+            WHEN a.class='precious_metal' THEN COALESCE(pm.unit_price_jpy,0)*COALESCE(pm.weight_g,0)
+            ELSE a.book_value_jpy
+          END
         )
       ) AS market_total_jpy,
       COUNT(*) AS count_assets
     FROM assets a
+    LEFT JOIN us_stocks us ON us.asset_id = a.id
+    LEFT JOIN jp_stocks jp ON jp.asset_id = a.id
+    LEFT JOIN precious_metals pm ON pm.asset_id = a.id
     GROUP BY a.class
     ORDER BY book_total_jpy DESC
   `;
 
-  db.all(query, (err, rows) => {
+  db.all(query, [usdJpyRate], (err, rows) => {
     if (err) {
       console.error('Class summary query error:', err);
       return res.status(500).json({ error: 'データベースクエリエラー' });
@@ -896,8 +955,18 @@ app.delete('/api/users/:id', requireAdmin, (req, res) => {
 });
 
 // Assets CRUD routes with current valuation
-app.get('/api/assets', (req, res) => {
+app.get('/api/assets', async (req, res) => {
+  // helper: tolerant JSON parse
+  const safeParseJson = (s) => { try { return JSON.parse(s); } catch (_) { return null; } };
   const { class: assetClass, page = '1', limit = '30' } = req.query;
+  // 現在のUSDJPYレート（キャッシュ利用）。失敗時は1で継続
+  let usdJpyRate = 1;
+  try {
+    const fx = await fetchWithCache(fxKey('USDJPY'), CACHE_TTL.fx, () => fxProvider.getRate('USDJPY'));
+    usdJpyRate = Number(fx.price) || 1;
+  } catch (e) {
+    console.warn('FX fetch failed for /api/assets; using 1 as fallback:', e.message);
+  }
   const pageNum = parseInt(page);
   const limitNum = parseInt(limit);
   const offset = (pageNum - 1) * limitNum;
@@ -956,7 +1025,24 @@ app.get('/api/assets', (req, res) => {
           
           db.get(`SELECT * FROM ${table} WHERE asset_id = ?`, [asset.id], (err, details) => {
             if (!err && details) {
-              const evaluation = Math.floor((details[priceField] || 0) * (details.quantity || 0));
+              const unit = Number(details[priceField] || 0);
+              const qty = Number(details.quantity || 0);
+              const evaluation = Math.floor(unit * qty);
+              // 簿価総額を「簿価単価×数量」に統一（US株はUSD×数量×USDJPY）
+              const originalBook = asset.book_value_jpy;
+              if (asset.class === 'us_stock') {
+                const computedBook = Math.floor(unit * qty * usdJpyRate);
+                if (Number.isFinite(computedBook)) {
+                  asset.original_book_value_jpy = originalBook;
+                  asset.book_value_jpy = computedBook;
+                }
+              } else {
+                const computedBook = Math.floor(unit * qty);
+                if (Number.isFinite(computedBook)) {
+                  asset.original_book_value_jpy = originalBook;
+                  asset.book_value_jpy = computedBook;
+                }
+              }
               asset.stock_details = {
                 ...details,
                 evaluation: evaluation
@@ -968,8 +1054,8 @@ app.get('/api/assets', (req, res) => {
               }
             }
             
-            // Get latest market valuation for total value (and fx_context for derived per-share)
-            db.get('SELECT value_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+            // Get latest market valuation for total value and unit price (fx_context for derived per-share)
+            db.get('SELECT value_jpy, unit_price_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
               if (!err && valuation && valuation.value_jpy) {
                 // Use actual market valuation if available
                 asset.current_value_jpy = valuation.value_jpy;
@@ -977,14 +1063,23 @@ app.get('/api/assets', (req, res) => {
                 // US株の単価（USD）派生: valuation と fx_context があり quantity>0 のとき
                 if (asset.class === 'us_stock' && asset.stock_details) {
                   const qty = Number(asset.stock_details.quantity || 0);
-                  if (qty > 0 && (!asset.stock_details.market_price_usd || Number.isNaN(Number(asset.stock_details.market_price_usd)))) {
-                    const m = (valuation.fx_context || '').match(/USDJPY@([0-9.]+)/);
-                    const rate = m ? parseFloat(m[1]) : null;
-                    if (rate && rate > 0) {
-                      const unitUsd = valuation.value_jpy / (qty * rate);
-                      if (Number.isFinite(unitUsd) && unitUsd > 0 && unitUsd < 10000) {
-                        asset.stock_details.market_price_usd = Math.round(unitUsd * 100) / 100;
-                      }
+                  if (qty > 0) {
+                    // v3 hotfix policy (always decide branch):
+                    // 1) Trust unit_price_jpy only when fx_context JSON exists with pair USDJPY and valid rate
+                    // 2) Else prefer committed us_stocks.market_price_usd
+                    // 3) Else fallback to value_jpy / (qty * rateFromCtx)
+                    const ctx = safeParseJson(valuation.fx_context);
+                    const rateFromCtx = (ctx && ctx.pair === 'USDJPY' && Number(ctx.rate) > 0) ? Number(ctx.rate) : null;
+                    let unitUsd = null;
+                    if (valuation.unit_price_jpy && rateFromCtx) {
+                      unitUsd = valuation.unit_price_jpy / rateFromCtx;
+                    } else if (Number(asset.stock_details.market_price_usd) > 0) {
+                      unitUsd = Number(asset.stock_details.market_price_usd);
+                    } else if (valuation.value_jpy && rateFromCtx) {
+                      unitUsd = valuation.value_jpy / (qty * rateFromCtx);
+                    }
+                    if (Number.isFinite(unitUsd) && unitUsd > 0) {
+                      asset.stock_details.market_price_usd = Math.round(unitUsd * 100) / 100;
                     }
                   }
                   // 評価額（USD）と損益（USD）を付与
@@ -999,8 +1094,15 @@ app.get('/api/assets', (req, res) => {
                     asset.stock_details.gain_loss_pct_usd = costTotalUsd > 0 ? Math.round((gl / costTotalUsd) * 10000) / 100 : null;
                     
                     // 為替レート統一: USD建て損益を現在レートで円換算（US株の正しい損益計算）
-                    const m = (valuation.fx_context || '').match(/USDJPY@([0-9.]+)/);
-                    const currentRate = m ? parseFloat(m[1]) : null;
+                    let currentRate = null;
+                    try {
+                      const fx = valuation.fx_context ? JSON.parse(valuation.fx_context) : null;
+                      if (fx && typeof fx.rate === 'number') currentRate = fx.rate;
+                    } catch (_) {}
+                    if (!currentRate) {
+                      const m = (valuation.fx_context || '').match(/USDJPY@([0-9.]+)/);
+                      currentRate = m ? parseFloat(m[1]) : null;
+                    }
                     if (currentRate && currentRate > 0) {
                       // USD建て簿価を現在レートで円換算
                       const currentBookValueJpy = Math.floor(costTotalUsd * currentRate);
@@ -1048,7 +1150,16 @@ app.get('/api/assets', (req, res) => {
         } else if (asset.class === 'precious_metal') {
           db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
             if (!err && details) {
-              const evaluation = Math.floor((details.unit_price_jpy || 0) * (details.weight_g || 0));
+              const unit = Number(details.unit_price_jpy || 0);
+              const weight = Number(details.weight_g || 0);
+              const evaluation = Math.floor(unit * weight);
+              // 簿価総額を「単価×重量」に統一
+              const originalBook = asset.book_value_jpy;
+              const computedBook = Math.floor(unit * weight);
+              if (Number.isFinite(computedBook)) {
+                asset.original_book_value_jpy = originalBook;
+                asset.book_value_jpy = computedBook;
+              }
               asset.precious_metal_details = {
                 ...details,
                 evaluation: evaluation
@@ -1123,7 +1234,16 @@ app.get('/api/assets', (req, res) => {
   });
 });
 
-app.get('/api/assets/:id', (req, res) => {
+app.get('/api/assets/:id', async (req, res) => {
+  // 現在のUSDJPYレート（キャッシュ利用）。失敗時は1で継続
+  let usdJpyRate = 1;
+  try {
+    const fx = await fetchWithCache(fxKey('USDJPY'), CACHE_TTL.fx, () => fxProvider.getRate('USDJPY'));
+    usdJpyRate = Number(fx.price) || 1;
+  } catch (e) {
+    console.warn('FX fetch failed for /api/assets/:id; using 1 as fallback:', e.message);
+  }
+
   db.get('SELECT * FROM assets WHERE id = ?', [req.params.id], (err, row) => {
     if (err) {
       return res.status(500).json({ error: err.message });
@@ -1137,6 +1257,15 @@ app.get('/api/assets/:id', (req, res) => {
     if (asset.class === 'precious_metal') {
       db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [asset.id], (err, details) => {
         if (!err && details) {
+          // 簿価総額（貴金属）= 単価×重量（円）
+          const unit = Number(details.unit_price_jpy || 0);
+          const weight = Number(details.weight_g || 0);
+          const originalBook = asset.book_value_jpy;
+          const computedBook = Math.floor(unit * weight);
+          if (Number.isFinite(computedBook)) {
+            asset.original_book_value_jpy = originalBook;
+            asset.book_value_jpy = computedBook;
+          }
           asset.precious_metal_details = details;
         }
         
@@ -1168,11 +1297,30 @@ app.get('/api/assets/:id', (req, res) => {
       const detailsTable = asset.class === 'jp_stock' ? 'jp_stocks' : 'us_stocks';
       db.get(`SELECT * FROM ${detailsTable} WHERE asset_id = ?`, [asset.id], (err, details) => {
         if (!err && details) {
+          // 簿価総額（株式）= 簿価単価×数量（US株はUSD×数量×USDJPY）
+          const qty = Number(details.quantity || 0);
+          if (asset.class === 'us_stock') {
+            const unitUsd = Number(details.avg_price_usd || 0);
+            const originalBook = asset.book_value_jpy;
+            const computedBook = Math.floor(unitUsd * qty * usdJpyRate);
+            if (Number.isFinite(computedBook)) {
+              asset.original_book_value_jpy = originalBook;
+              asset.book_value_jpy = computedBook;
+            }
+          } else if (asset.class === 'jp_stock') {
+            const unitJpy = Number(details.avg_price_jpy || 0);
+            const originalBook = asset.book_value_jpy;
+            const computedBook = Math.floor(unitJpy * qty);
+            if (Number.isFinite(computedBook)) {
+              asset.original_book_value_jpy = originalBook;
+              asset.book_value_jpy = computedBook;
+            }
+          }
           asset.stock_details = details;
         }
         
         // Get latest market valuation for total value (with fx_context for US stocks)
-        db.get('SELECT value_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        db.get('SELECT value_jpy, unit_price_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
           if (!err && valuation && valuation.value_jpy) {
             // Use actual market valuation if available
             asset.current_value_jpy = valuation.value_jpy;
@@ -1180,6 +1328,19 @@ app.get('/api/assets/:id', (req, res) => {
             // US株の場合: USD建て損益計算で為替レート統一
             if (asset.class === 'us_stock' && asset.stock_details && valuation.fx_context) {
               const qty = Number(asset.stock_details.quantity || 0);
+              // Decide unit USD by policy: unit_price_jpy/fx_context > committed market_price_usd > value_jpy-based
+              let unitUsd = null; let rateFromCtx = null;
+              try { const fx = valuation.fx_context ? JSON.parse(valuation.fx_context) : null; if (fx && fx.pair === 'USDJPY' && Number(fx.rate) > 0) rateFromCtx = Number(fx.rate); } catch(_) {}
+              if (valuation.unit_price_jpy && rateFromCtx) {
+                unitUsd = valuation.unit_price_jpy / rateFromCtx;
+              } else if (Number(asset.stock_details.market_price_usd) > 0) {
+                unitUsd = Number(asset.stock_details.market_price_usd);
+              } else if (valuation.value_jpy && qty > 0 && rateFromCtx) {
+                unitUsd = valuation.value_jpy / (qty * rateFromCtx);
+              }
+              if (Number.isFinite(unitUsd) && unitUsd > 0) {
+                asset.stock_details.market_price_usd = Math.round(unitUsd * 100) / 100;
+              }
               const avgPriceUsd = Number(asset.stock_details.avg_price_usd || 0);
               const marketPriceUsd = Number(asset.stock_details.market_price_usd || 0);
               
@@ -1189,8 +1350,7 @@ app.get('/api/assets/:id', (req, res) => {
                 const glUsd = curTotalUsd - costTotalUsd;
                 
                 // 現在の為替レートを抽出
-                const m = valuation.fx_context.match(/USDJPY@([0-9.]+)/);
-                const currentRate = m ? parseFloat(m[1]) : null;
+                const currentRate = rateFromCtx;
                 
                 if (currentRate && currentRate > 0) {
                   // USD建て簿価を現在レートで円換算
@@ -2092,7 +2252,14 @@ app.post('/api/valuations/:assetId/refresh', async (req, res) => {
             }
 
             asset.stock_details = details;
-            await processMarketValuation(asset, req, res);
+            // Use new market scrape kit for US stocks
+            if (asset.class === 'us_stock' && details.ticker) {
+              const { refreshValuationHandler } = require('./src/routes/valuations.refresh');
+              // Pass original req/res so handler can access req.app injections
+              return refreshValuationHandler(req, res);
+            } else {
+              await processMarketValuation(asset, req, res);
+            }
           });
         } else if (asset.class === 'precious_metal') {
           db.get('SELECT * FROM precious_metals WHERE asset_id = ?', [assetId], async (err, details) => {
@@ -2206,40 +2373,74 @@ app.post('/api/valuations/refresh-all', async (req, res) => {
             });
 
             if (details) {
-              if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
-                asset.stock_details = details;
-              } else if (asset.class === 'precious_metal') {
-                asset.precious_metal_details = details;
+              // US stocks use new scrape orchestrator and commit flow
+              if (asset.class === 'us_stock') {
+                const { fetchLatestUSQuote } = require('./src/market/index.ts');
+                const tickerUpper = String(details.ticker || '').toUpperCase();
+                const isORCL = tickerUpper === 'ORCL';
+                const providers = isORCL ? ['google'] : ['google','yahoo'];
+                const opt = isORCL
+                  ? {
+                      providers,
+                      yahooHost: 'com',
+                      googleUrlOverride: 'https://www.google.com/finance/quote/ORCL:NYSE?sa=X&ved=2ahUKEwj5lbij7JGPAxX5e_UHHWDrIJIQ3ecFegQINhAb'
+                    }
+                  : { providers, yahooHost: 'com' };
+                const quote = await fetchLatestUSQuote({ ticker: details.ticker, exchange: details.exchange || 'NYSE' }, opt);
+                const unitPriceUsd = Number(quote.aggregate.price);
+                if (!Number.isFinite(unitPriceUsd) || unitPriceUsd <= 0) {
+                  throw new Error('bulk_bad_quote');
+                }
+                // FX USDJPY
+                const fxData = await fetchWithCache(fxKey('USDJPY'), CACHE_TTL.fx, () => fxProvider.getRate('USDJPY'));
+                const rate = Number(fxData.price);
+                if (!Number.isFinite(rate) || rate <= 0) throw new Error('bulk_bad_fx');
+                const qty = Number(details.quantity || 0);
+                const unitPriceJpy = Math.floor(unitPriceUsd * rate * 100) / 100;
+                const valueJpy = Math.floor(unitPriceUsd * qty * rate);
+                const asOf = new Date().toISOString();
+                const fxContext = JSON.stringify({ pair: 'USDJPY', rate, as_of: fxData.asOf || asOf });
+
+                // Insert valuation row
+                await new Promise((resolve, reject) => {
+                  db.run(
+                    'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
+                    [asset.id, asOf, valueJpy, unitPriceJpy, fxContext],
+                    function(err) { err ? reject(err) : resolve(); }
+                  );
+                });
+                // Update us_stocks.market_price_usd
+                await new Promise((resolve, reject) => {
+                  db.run('UPDATE us_stocks SET market_price_usd = ? WHERE asset_id = ?', [unitPriceUsd, asset.id], (err) => err ? reject(err) : resolve());
+                });
+
+                // Audit + result
+                logAudit('assets', asset.id, 'valuation_refresh_bulk_us', null, { as_of: asOf, value_jpy: valueJpy, unit_price_jpy: unitPriceJpy, fx_context: fxContext },
+                  req.session.user ? req.session.user.id : 'guest');
+                results.push({ asset_id: asset.id, name: asset.name, class: asset.class, value_jpy: valueJpy, market_price_usd: unitPriceUsd });
+                updatedCount++;
+              } else {
+                // JP stocks and precious metals: keep existing calculation path
+                if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+                  asset.stock_details = details;
+                } else if (asset.class === 'precious_metal') {
+                  asset.precious_metal_details = details;
+                }
+                // Calculate market valuation
+                const valuation = await calculateMarketValue(asset);
+                // Save to valuations table
+                await new Promise((resolve, reject) => {
+                  db.run(
+                    'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
+                    [asset.id, valuation.as_of, valuation.value_jpy, valuation.unit_price_jpy || null, valuation.fx_context],
+                    function(err) { if (err) reject(err); else resolve(); }
+                  );
+                });
+                logAudit('assets', asset.id, 'valuation_refresh_bulk', null, valuation,
+                  req.session.user ? req.session.user.id : 'guest');
+                results.push({ asset_id: asset.id, name: asset.name, class: asset.class, value_jpy: valuation.value_jpy, stale: valuation.stale });
+                updatedCount++;
               }
-
-              // Calculate market valuation
-              const valuation = await calculateMarketValue(asset);
-
-              // Save to valuations table
-              await new Promise((resolve, reject) => {
-                db.run(
-                  'INSERT INTO valuations (asset_id, as_of, value_jpy, fx_context) VALUES (?, ?, ?, ?)',
-                  [asset.id, valuation.as_of, valuation.value_jpy, valuation.fx_context],
-                  function(err) {
-                    if (err) reject(err);
-                    else resolve();
-                  }
-                );
-              });
-
-              // Log audit
-              logAudit('assets', asset.id, 'valuation_refresh_bulk', null, valuation, 
-                req.session.user ? req.session.user.id : 'guest');
-
-              results.push({
-                asset_id: asset.id,
-                name: asset.name,
-                class: asset.class,
-                value_jpy: valuation.value_jpy,
-                stale: valuation.stale
-              });
-
-              updatedCount++;
             }
           }
         } catch (error) {
@@ -2278,6 +2479,40 @@ app.get('/api/market/status', (req, res) => {
     },
     now: new Date().toISOString()
   });
+});
+
+// GET /api/market/us-stocks - List US stocks with current market_price_usd for quick verification
+app.get('/api/market/us-stocks', async (req, res) => {
+  try {
+    const sql = `
+      SELECT a.id AS asset_id, a.name, u.ticker, u.exchange, u.quantity,
+             u.avg_price_usd, u.market_price_usd
+      FROM assets a
+      JOIN us_stocks u ON u.asset_id = a.id
+      ORDER BY a.id ASC
+    `;
+    db.all(sql, [], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      return res.json({ now: new Date().toISOString(), count: rows.length, items: rows });
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/market/probe - Market data diagnostic probe
+app.get('/api/market/probe', async (req, res) => {
+  if (!MARKET_ENABLE) {
+    return res.status(403).json({ code: 'market_disabled', message: 'Market data is disabled' });
+  }
+  
+  try {
+    const { probeHandler } = require('./src/routes/market.probe.ts');
+    return await probeHandler(req, res);
+  } catch (error) {
+    console.error('Market probe error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // GET /api/market/fx/:pair - Get specific FX rate
@@ -2718,20 +2953,52 @@ async function backupDatabase() {
   }
 }
 
-// Initialize database and start server
+// Initialize database always (needed for tests)
 initDatabase();
-setupCsvWatcher();
-setupWalCheckpoints();
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Portfolio management server running on port ${port}`);
-  console.log(`Primary URL: http://assets.local:${port}`);
-  console.log(`Alternative URL: http://localhost:${port}`);
-  console.log(`Network access: http://<server-ip>:${port}`);
-  console.log('\nTo access via assets.local, add this line to your hosts file:');
-  console.log('127.0.0.1 assets.local');
-  console.log('WAL mode enabled for database');
-});
+// Seed default admin in test environment only
+if (process.env.NODE_ENV === 'test') {
+  try {
+    db.get('SELECT COUNT(*) AS cnt FROM users', (err, row) => {
+      if (!err && row && row.cnt === 0) {
+        const username = 'admin';
+        const password = 'admin123';
+        bcrypt.hash(password, 10, (hashErr, hash) => {
+          if (hashErr) return console.error('Test admin hash failed:', hashErr);
+          db.run(
+            'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
+            [username, hash, 'admin'],
+            (insErr) => {
+              if (insErr) console.error('Test admin insert failed:', insErr);
+              else console.log('Test admin user seeded');
+            }
+          );
+        });
+      }
+    });
+  } catch (e) {
+    console.error('Test admin seed error:', e);
+  }
+}
+
+// Only start watchers and HTTP listener when run directly
+if (require.main === module) {
+  setupCsvWatcher();
+  setupWalCheckpoints();
+
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Portfolio management server running on port ${port}`);
+    console.log(`Primary URL: http://assets.local:${port}`);
+    console.log(`Alternative URL: http://localhost:${port}`);
+    console.log(`Network access: http://<server-ip>:${port}`);
+    console.log('\nTo access via assets.local, add this line to your hosts file:');
+    console.log('127.0.0.1 assets.local');
+    console.log('WAL mode enabled for database');
+  });
+}
+
+// Export app for testing
+module.exports = app;
 
 // Graceful shutdown with backup
 function gracefulShutdown(signal) {

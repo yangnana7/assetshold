@@ -1162,6 +1162,7 @@ app.get('/api/assets', async (req, res) => {
                   if (asset.precious_metal_details) {
                     asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
                     asset.precious_metal_details.currency = 'JPY';
+                    asset.precious_metal_details.market_unit_price_jpy = valuation.unit_price_jpy;
                   }
                   // Generic keys for UI compatibility
                   asset.market_unit_price = valuation.unit_price_jpy;
@@ -1274,6 +1275,7 @@ app.get('/api/assets/:id', async (req, res) => {
               if (asset.precious_metal_details) {
                 asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
                 asset.precious_metal_details.currency = 'JPY';
+                asset.precious_metal_details.market_unit_price_jpy = valuation.unit_price_jpy;
               }
               asset.market_unit_price = valuation.unit_price_jpy;
               asset.market_unit_currency = 'JPY';

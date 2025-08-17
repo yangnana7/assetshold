@@ -1063,8 +1063,8 @@ app.get('/api/assets', async (req, res) => {
                 // US株の単価（USD）派生: valuation と fx_context があり quantity>0 のとき
                 if (asset.class === 'us_stock' && asset.stock_details) {
                   const qty = Number(asset.stock_details.quantity || 0);
-                  if (qty > 0 && (!asset.stock_details.market_price_usd || Number.isNaN(Number(asset.stock_details.market_price_usd)))) {
-                    // v3 hotfix policy:
+                  if (qty > 0) {
+                    // v3 hotfix policy (always decide branch):
                     // 1) Trust unit_price_jpy only when fx_context JSON exists with pair USDJPY and valid rate
                     // 2) Else prefer committed us_stocks.market_price_usd
                     // 3) Else fallback to value_jpy / (qty * rateFromCtx)
@@ -1075,7 +1075,7 @@ app.get('/api/assets', async (req, res) => {
                       unitUsd = valuation.unit_price_jpy / rateFromCtx;
                     } else if (Number(asset.stock_details.market_price_usd) > 0) {
                       unitUsd = Number(asset.stock_details.market_price_usd);
-                    } else if (valuation.value_jpy && qty > 0 && rateFromCtx) {
+                    } else if (valuation.value_jpy && rateFromCtx) {
                       unitUsd = valuation.value_jpy / (qty * rateFromCtx);
                     }
                     if (Number.isFinite(unitUsd) && unitUsd > 0) {
@@ -1320,7 +1320,7 @@ app.get('/api/assets/:id', async (req, res) => {
         }
         
         // Get latest market valuation for total value (with fx_context for US stocks)
-        db.get('SELECT value_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        db.get('SELECT value_jpy, unit_price_jpy, fx_context FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
           if (!err && valuation && valuation.value_jpy) {
             // Use actual market valuation if available
             asset.current_value_jpy = valuation.value_jpy;
@@ -1328,6 +1328,19 @@ app.get('/api/assets/:id', async (req, res) => {
             // US株の場合: USD建て損益計算で為替レート統一
             if (asset.class === 'us_stock' && asset.stock_details && valuation.fx_context) {
               const qty = Number(asset.stock_details.quantity || 0);
+              // Decide unit USD by policy: unit_price_jpy/fx_context > committed market_price_usd > value_jpy-based
+              let unitUsd = null; let rateFromCtx = null;
+              try { const fx = valuation.fx_context ? JSON.parse(valuation.fx_context) : null; if (fx && fx.pair === 'USDJPY' && Number(fx.rate) > 0) rateFromCtx = Number(fx.rate); } catch(_) {}
+              if (valuation.unit_price_jpy && rateFromCtx) {
+                unitUsd = valuation.unit_price_jpy / rateFromCtx;
+              } else if (Number(asset.stock_details.market_price_usd) > 0) {
+                unitUsd = Number(asset.stock_details.market_price_usd);
+              } else if (valuation.value_jpy && qty > 0 && rateFromCtx) {
+                unitUsd = valuation.value_jpy / (qty * rateFromCtx);
+              }
+              if (Number.isFinite(unitUsd) && unitUsd > 0) {
+                asset.stock_details.market_price_usd = Math.round(unitUsd * 100) / 100;
+              }
               const avgPriceUsd = Number(asset.stock_details.avg_price_usd || 0);
               const marketPriceUsd = Number(asset.stock_details.market_price_usd || 0);
               
@@ -1337,8 +1350,7 @@ app.get('/api/assets/:id', async (req, res) => {
                 const glUsd = curTotalUsd - costTotalUsd;
                 
                 // 現在の為替レートを抽出
-                const m = valuation.fx_context.match(/USDJPY@([0-9.]+)/);
-                const currentRate = m ? parseFloat(m[1]) : null;
+                const currentRate = rateFromCtx;
                 
                 if (currentRate && currentRate > 0) {
                   // USD建て簿価を現在レートで円換算

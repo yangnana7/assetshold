@@ -2427,6 +2427,21 @@ app.get('/api/market/status', (req, res) => {
   });
 });
 
+// GET /api/market/probe - Market data diagnostic probe
+app.get('/api/market/probe', async (req, res) => {
+  if (!MARKET_ENABLE) {
+    return res.status(403).json({ code: 'market_disabled', message: 'Market data is disabled' });
+  }
+  
+  try {
+    const { probeHandler } = require('./src/routes/market.probe.ts');
+    return await probeHandler(req, res);
+  } catch (error) {
+    console.error('Market probe error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/market/fx/:pair - Get specific FX rate
 app.get('/api/market/fx/:pair', async (req, res) => {
   const pair = req.params.pair.toUpperCase();

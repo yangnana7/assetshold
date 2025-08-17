@@ -33,28 +33,6 @@
       "marketwatch_key": "msft"
     },
     {
-      "canonical": "GOOGL",
-      "exchange": "NASDAQ",
-      "aliases": [
-        "GOOGL",
-        "GOOGLE A"
-      ],
-      "yahoo_key": "GOOGL",
-      "google_key": "GOOGL:NASDAQ",
-      "marketwatch_key": "googl"
-    },
-    {
-      "canonical": "GOOG",
-      "exchange": "NASDAQ",
-      "aliases": [
-        "GOOG",
-        "GOOGLE C"
-      ],
-      "yahoo_key": "GOOG",
-      "google_key": "GOOG:NASDAQ",
-      "marketwatch_key": "goog"
-    },
-    {
       "canonical": "BRK.B",
       "exchange": "NYSE",
       "aliases": [

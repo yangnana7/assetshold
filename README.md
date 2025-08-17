@@ -373,6 +373,12 @@ sudo systemctl restart assetshold
 
 ### バックアップ管理
 
+# バックアップからの復旧（推奨方法）
+  sudo systemctl stop assetshold
+  cp backup/portfolio_20250816_185113.db
+  data/portfolio.db
+  sudo systemctl start assetshold
+
 #### 自動バックアップ
 
 アプリケーション終了時に自動でデータベースバックアップが作成されます。

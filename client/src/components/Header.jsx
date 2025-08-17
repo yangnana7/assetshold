@@ -20,12 +20,6 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
               資産一覧
             </button>
             <button
-              className={currentPage === 'import' ? 'active' : ''}
-              onClick={() => onPageChange('import')}
-            >
-              インポート・エクスポート
-            </button>
-            <button
               className={currentPage === 'users' ? 'active' : ''}
               onClick={() => onPageChange('users')}
             >

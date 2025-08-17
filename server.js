@@ -1149,6 +1149,10 @@ app.get('/api/assets', async (req, res) => {
                 ...details,
                 evaluation: evaluation
               };
+              // Keep book unit price at root for UI (DO NOT overwrite with market later)
+              asset.unit_price_jpy = details.unit_price_jpy || null;
+              asset.unit_price = details.unit_price_jpy || null;
+              asset.unit_currency = 'JPY';
             }
             
             // Get latest market valuation for unit price and total value
@@ -1160,17 +1164,13 @@ app.get('/api/assets', async (req, res) => {
                   asset.market_price_jpy = valuation.unit_price_jpy;
                   asset.market_unit_as_of = valuation.as_of;
                   if (asset.precious_metal_details) {
-                    asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
                     asset.precious_metal_details.currency = 'JPY';
                     asset.precious_metal_details.market_unit_price_jpy = valuation.unit_price_jpy;
                   }
                   // Generic keys for UI compatibility
                   asset.market_unit_price = valuation.unit_price_jpy;
                   asset.market_unit_currency = 'JPY';
-                  // Root-level aliases some UI variants may expect
-                  asset.unit_price_jpy = valuation.unit_price_jpy;
-                  asset.unit_price = valuation.unit_price_jpy;
-                  asset.unit_currency = 'JPY';
+                  // Do NOT override root-level book unit price
                   // UI-friendly explicit fields
                   try {
                     const fmt = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
@@ -1183,14 +1183,14 @@ app.get('/api/assets', async (req, res) => {
                     asset.ui_market_unit_currency = 'JPY';
                     asset.ui_market_unit_price_label = `${formatted} / g`;
                   }
-                  // Generic structured aliases
+                  // Generic structured aliases (do not override book fields)
                   const unitUsdForMarket = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
                   asset.market = {
                     unit_price_jpy: valuation.unit_price_jpy,
                     unit_price_usd: unitUsdForMarket,
                     currency: 'JPY'
                   };
-                  asset.details = Object.assign({}, asset.details, { unit_price_jpy: valuation.unit_price_jpy });
+                  asset.details = Object.assign({}, asset.details, { market_unit_price_jpy: valuation.unit_price_jpy });
                   asset.market_unit_available = true;
                   // USD compatibility for UIs that expect USD column
                   const unitUsdRoot = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
@@ -1330,9 +1330,6 @@ app.get('/api/assets/:id', async (req, res) => {
                   }
                   asset.market_unit_price = valuation.unit_price_jpy;
                   asset.market_unit_currency = 'JPY';
-                  asset.unit_price_jpy = valuation.unit_price_jpy;
-                  asset.unit_price = valuation.unit_price_jpy;
-                  asset.unit_currency = 'JPY';
                   try {
                     const fmt = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
                     asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;

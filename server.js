@@ -615,45 +615,33 @@ app.get('/api/dashboard', async (req, res) => {
   const queries = {
     totalAssets: `SELECT COUNT(*) as count FROM assets`,
     totalValue: `
-      SELECT SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as total 
+      SELECT SUM(
+        COALESCE(
+          (SELECT v.value_jpy FROM valuations v WHERE v.asset_id = a.id ORDER BY v.as_of DESC, v.id DESC LIMIT 1),
+          a.book_value_jpy
+        )
+      ) as total
       FROM assets a
-      LEFT JOIN (
-        SELECT vv.asset_id, vv.value_jpy
-        FROM valuations vv
-        INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
-          FROM valuations
-          GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
-      ) v ON a.id = v.asset_id
     `,
     assetsByClass: `
-      SELECT a.class, COUNT(*) as count, SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as total_value 
+      SELECT a.class, COUNT(*) as count,
+             SUM(
+               COALESCE(
+                 (SELECT v.value_jpy FROM valuations v WHERE v.asset_id = a.id ORDER BY v.as_of DESC, v.id DESC LIMIT 1),
+                 a.book_value_jpy
+               )
+             ) as total_value
       FROM assets a
-      LEFT JOIN (
-        SELECT vv.asset_id, vv.value_jpy
-        FROM valuations vv
-        INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
-          FROM valuations
-          GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
-      ) v ON a.id = v.asset_id
       GROUP BY a.class
     `,
     topAssets: `
-      SELECT a.name, a.note, a.book_value_jpy, COALESCE(v.value_jpy, a.book_value_jpy) as current_value_jpy
+      SELECT a.name, a.note, a.book_value_jpy,
+             COALESCE(
+               (SELECT v.value_jpy FROM valuations v WHERE v.asset_id = a.id ORDER BY v.as_of DESC, v.id DESC LIMIT 1),
+               a.book_value_jpy
+             ) as current_value_jpy
       FROM assets a
-      LEFT JOIN (
-        SELECT vv.asset_id, vv.value_jpy
-        FROM valuations vv
-        INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
-          FROM valuations
-          GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
-      ) v ON a.id = v.asset_id
-      ORDER BY COALESCE(v.value_jpy, a.book_value_jpy) DESC 
+      ORDER BY current_value_jpy DESC 
       LIMIT 3
     `,
     monthlyTrend: `
@@ -664,7 +652,8 @@ app.get('/api/dashboard', async (req, res) => {
               ELSE a.book_value_jpy
             END) as book_value_total,
         SUM(
-          COALESCE(v.value_jpy,
+          COALESCE(
+            (SELECT v.value_jpy FROM valuations v WHERE v.asset_id = a.id ORDER BY v.as_of DESC, v.id DESC LIMIT 1),
             CASE 
               WHEN a.class='us_stock' THEN COALESCE(us.avg_price_usd,0)*COALESCE(us.quantity,0)*?
               WHEN a.class='jp_stock' THEN COALESCE(jp.avg_price_jpy,0)*COALESCE(jp.quantity,0)
@@ -677,15 +666,6 @@ app.get('/api/dashboard', async (req, res) => {
       LEFT JOIN us_stocks us ON us.asset_id = a.id
       LEFT JOIN jp_stocks jp ON jp.asset_id = a.id
       LEFT JOIN precious_metals pm ON pm.asset_id = a.id
-      LEFT JOIN (
-        SELECT vv.asset_id, vv.value_jpy
-        FROM valuations vv
-        INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
-          FROM valuations
-          GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
-      ) v ON a.id = v.asset_id
       WHERE a.created_at IS NOT NULL 
       GROUP BY strftime('%Y-%m', a.created_at)
       ORDER BY month DESC 
@@ -1181,7 +1161,11 @@ app.get('/api/assets', async (req, res) => {
                   asset.market_unit_as_of = valuation.as_of;
                   if (asset.precious_metal_details) {
                     asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
+                    asset.precious_metal_details.currency = 'JPY';
                   }
+                  // Generic keys for UI compatibility
+                  asset.market_unit_price = valuation.unit_price_jpy;
+                  asset.market_unit_currency = 'JPY';
                 }
                 if (valuation.value_jpy) {
                   // Use actual market valuation if available
@@ -1289,7 +1273,10 @@ app.get('/api/assets/:id', async (req, res) => {
               asset.market_unit_as_of = valuation.as_of;
               if (asset.precious_metal_details) {
                 asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
+                asset.precious_metal_details.currency = 'JPY';
               }
+              asset.market_unit_price = valuation.unit_price_jpy;
+              asset.market_unit_currency = 'JPY';
             }
             if (valuation.value_jpy) {
               // Use actual market valuation if available
@@ -2446,11 +2433,12 @@ app.post('/api/valuations/refresh-all', async (req, res) => {
                 }
                 // Calculate market valuation
                 const valuation = await calculateMarketValue(asset);
-                // Save to valuations table
+                // Save to valuations table, ensure unique as_of per insert to avoid duplicate MAX(as_of) ties
+                const asOfNow = new Date().toISOString();
                 await new Promise((resolve, reject) => {
                   db.run(
                     'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
-                    [asset.id, valuation.as_of, valuation.value_jpy, valuation.unit_price_jpy || null, valuation.fx_context],
+                    [asset.id, asOfNow, valuation.value_jpy, valuation.unit_price_jpy || null, valuation.fx_context],
                     function(err) { if (err) reject(err); else resolve(); }
                   );
                 });

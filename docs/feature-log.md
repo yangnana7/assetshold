@@ -30,6 +30,32 @@
 
 ---
 
+## 2025-08-17 (Hotfix)
+
+- 目的/背景: 貴金属の時価が取得できない不具合を修正（Tanaka 解析用の正規表現エスケープ誤りによりマッチ失敗）。
+- 変更点:
+  - `providers/metal/TanakaProvider.js` の HTML 解析を見直し: 余分なバックスラッシュを除去し、空白や改行に強い2パターンの正規表現へ刷新。
+  - 価格の検証を追加（数値/正値判定）。
+  - ユニットテスト追加: `test/metal.tanaka.test.js`（表形式/改行混在パターンの抽出を検証）。
+- 影響範囲: 市場評価（貴金属）の時価取得のみ。UI/DB/既存APIの変更はなし。
+- 変更ファイル: `providers/metal/TanakaProvider.js`, `test/metal.tanaka.test.js`
+- 動作確認手順:
+  1. `npm test -- test/metal.tanaka.test.js` を実行し全テストが成功すること。
+  2. `MARKET_ENABLE=1` 環境で `/api/valuations/:assetId/refresh`（class=precious_metal）を叩き、`unit_price_jpy`/`value_jpy` が返ることを確認。
+- 既知の注意点/制約: 上流サイトの構造変更には引き続き影響を受ける。休日・休場日は Tanaka が更新されない場合があり、Mitsubishi フォールバックが適用される。
+- ロールバック方針: 当該ファイルの差分を戻す。
+
+## 2025-08-17
+
+- 市場評価額の正確性向上（USD/JPY 両立）
+  - valuations.fx_context を JSON 形式で保存（pair/rate/as_of）。既存の文字列形式も読取フォールバック対応。
+  - us_stock/jp_stock/precious_metal の全てで valuations.unit_price_jpy を保存（米株はUSD×USDJPY）。
+  - 一括更新 `/api/valuations/refresh-all` でも unit_price_jpy を INSERT するよう統一。
+  - 資産一覧における US 株の USD 単価派生を安定化（`market_price_usd` 優先、次点で `unit_price_jpy / fx.rate`）。高額銘柄も閾値排除なし。
+  - 円建て損益は `fx_context.rate` を用いた統一レートで再計算。
+  - 影響: `server.js`（評価計算/保存・一覧派生）, `docs/valuation-design.md`（新規）
+  - 互換性: スキーマ変更なし。既存の valuations レコードはそのまま有効。
+
 ## 2025-08-16 (Updated)
 
 - ダッシュボード グラフレイアウト改善・単位統一

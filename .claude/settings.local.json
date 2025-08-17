@@ -15,7 +15,9 @@
       "Bash(npm install:*)",
       "Bash(git add:*)",
       "Bash(git reset:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(cp:*)",
+      "Bash(xcopy:*)"
     ],
     "deny": []
   }

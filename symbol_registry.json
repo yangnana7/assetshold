@@ -1,0 +1,71 @@
+{
+  "version": "20250817_1733",
+  "tickers": [
+    {
+      "canonical": "AAPL",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "AAPL"
+      ],
+      "yahoo_key": "AAPL",
+      "google_key": "AAPL:NASDAQ",
+      "marketwatch_key": "AAPL"
+    },
+    {
+      "canonical": "MSFT",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "MSFT"
+      ],
+      "yahoo_key": "MSFT",
+      "google_key": "MSFT:NASDAQ",
+      "marketwatch_key": "MSFT"
+    },
+    {
+      "canonical": "GOOGL",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "GOOGL",
+        "GOOGLE A"
+      ],
+      "yahoo_key": "GOOGL",
+      "google_key": "GOOGL:NASDAQ",
+      "marketwatch_key": "GOOGL"
+    },
+    {
+      "canonical": "GOOG",
+      "exchange": "NASDAQ",
+      "aliases": [
+        "GOOG",
+        "GOOGLE C"
+      ],
+      "yahoo_key": "GOOG",
+      "google_key": "GOOG:NASDAQ",
+      "marketwatch_key": "GOOG"
+    },
+    {
+      "canonical": "BRK.B",
+      "exchange": "NYSE",
+      "aliases": [
+        "BRK.B",
+        "BRK-B",
+        "BERKSHIRE B"
+      ],
+      "yahoo_key": "BRK-B",
+      "google_key": "BRK.B:NYSE",
+      "marketwatch_key": "BRK.B"
+    },
+    {
+      "canonical": "BF.B",
+      "exchange": "NYSE",
+      "aliases": [
+        "BF.B",
+        "BF-B",
+        "BROWN FORMAN B"
+      ],
+      "yahoo_key": "BF-B",
+      "google_key": "BF.B:NYSE",
+      "marketwatch_key": "BF.B"
+    }
+  ]
+}

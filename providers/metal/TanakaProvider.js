@@ -9,10 +9,24 @@ async function getGoldJPYPerGram() {
   const res = await fetch(url, { timeout: 10000, headers: { 'User-Agent': 'assetshold/1.0' } });
   if (!res.ok) throw new Error('tanaka fetch failed');
   const html = await res.text();
-  // naive parse: look for "小売価格" table cell for gold (24K) per gram
-  const m = html.match(/<th[^>]*>金.*?<\/th>\\s*<td[^>]*>([\\d,]+)<\\/td>/s);
+  // Normalize whitespace to make regex matching robust across layout changes
+  const norm = html.replace(/\r?\n|\t/g, ' ').replace(/\s+/g, ' ');
+
+  // Try a couple of patterns around the 金 (gold) label followed by a numeric cell
+  const patterns = [
+    /<th[^>]*>\s*金\s*<\/th>\s*<td[^>]*>\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*<\/td>/i,
+    /金[^<]*<\/(?:th|td)>\s*<td[^>]*>\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*<\/td>/i,
+  ];
+
+  let m = null;
+  for (const re of patterns) {
+    m = norm.match(re);
+    if (m) break;
+  }
+
   if (!m) throw new Error('tanaka parse failed');
-  const price = Number(m[1].replace(/[,]/g,''));
+  const price = Number(String(m[1]).replace(/[,]/g, ''));
+  if (!isFinite(price) || price <= 0) throw new Error('tanaka invalid price');
   return { metal: 'gold', price_jpy_per_g: price, as_of: new Date().toISOString() };
 }
 

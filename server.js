@@ -120,6 +120,11 @@ const duplicateService = new DuplicateDetectionService(db);
 // Centralized cache helpers (DRY)
 const { createCache } = require('./server/utils/cache');
 const { getCachedPrice, setCachedPrice, fetchWithCache } = createCache(db);
+// Inject commonly used services for route handlers (hotfix refresh commit)
+app.set('db', db);
+app.set('fxProvider', fxProvider);
+app.set('CACHE_TTL', CACHE_TTL);
+app.set('fetchWithCache', fetchWithCache);
 
 // Function to calculate current market value for assets
 function calculateCurrentValue(asset) {
@@ -2233,10 +2238,8 @@ app.post('/api/valuations/:assetId/refresh', async (req, res) => {
             // Use new market scrape kit for US stocks
             if (asset.class === 'us_stock' && details.ticker) {
               const { refreshValuationHandler } = require('./src/routes/valuations.refresh');
-              return refreshValuationHandler({
-                ...req,
-                body: { ticker: details.ticker, exchange: details.exchange }
-              }, res);
+              // Pass original req/res so handler can access req.app injections
+              return refreshValuationHandler(req, res);
             } else {
               await processMarketValuation(asset, req, res);
             }

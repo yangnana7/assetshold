@@ -1172,10 +1172,16 @@ app.get('/api/assets', async (req, res) => {
             }
             
             // Get latest market valuation for unit price and total value
-            db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+            db.get('SELECT unit_price_jpy, value_jpy, as_of FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
               if (!err && valuation) {
                 if (valuation.unit_price_jpy) {
                   asset.market_unit_price_jpy = valuation.unit_price_jpy;
+                  // Provide alternative key some UIs expect
+                  asset.market_price_jpy = valuation.unit_price_jpy;
+                  asset.market_unit_as_of = valuation.as_of;
+                  if (asset.precious_metal_details) {
+                    asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
+                  }
                 }
                 if (valuation.value_jpy) {
                   // Use actual market valuation if available
@@ -1275,10 +1281,15 @@ app.get('/api/assets/:id', async (req, res) => {
         }
         
         // Get latest market valuation for unit price and total value
-        db.get('SELECT unit_price_jpy, value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+        db.get('SELECT unit_price_jpy, value_jpy, as_of FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
           if (!err && valuation) {
             if (valuation.unit_price_jpy) {
               asset.market_unit_price_jpy = valuation.unit_price_jpy;
+              asset.market_price_jpy = valuation.unit_price_jpy;
+              asset.market_unit_as_of = valuation.as_of;
+              if (asset.precious_metal_details) {
+                asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
+              }
             }
             if (valuation.value_jpy) {
               // Use actual market valuation if available

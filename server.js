@@ -1031,13 +1031,13 @@ app.get('/api/assets', async (req, res) => {
                 const computedBook = Math.floor(unit * qty * usdJpyRate);
                 if (Number.isFinite(computedBook)) {
                   asset.original_book_value_jpy = originalBook;
-                  asset.book_value_jpy = computedBook;
+                  asset.computed_book_value_jpy = computedBook;
                 }
               } else {
                 const computedBook = Math.floor(unit * qty);
                 if (Number.isFinite(computedBook)) {
                   asset.original_book_value_jpy = originalBook;
-                  asset.book_value_jpy = computedBook;
+                  asset.computed_book_value_jpy = computedBook;
                 }
               }
               asset.stock_details = {
@@ -1155,7 +1155,7 @@ app.get('/api/assets', async (req, res) => {
               const computedBook = Math.floor(unit * weight);
               if (Number.isFinite(computedBook)) {
                 asset.original_book_value_jpy = originalBook;
-                asset.book_value_jpy = computedBook;
+                asset.computed_book_value_jpy = computedBook;
               }
               asset.precious_metal_details = {
                 ...details,
@@ -1261,7 +1261,7 @@ app.get('/api/assets/:id', async (req, res) => {
           const computedBook = Math.floor(unit * weight);
           if (Number.isFinite(computedBook)) {
             asset.original_book_value_jpy = originalBook;
-            asset.book_value_jpy = computedBook;
+            asset.computed_book_value_jpy = computedBook;
           }
           asset.precious_metal_details = details;
         }
@@ -1302,7 +1302,7 @@ app.get('/api/assets/:id', async (req, res) => {
             const computedBook = Math.floor(unitUsd * qty * usdJpyRate);
             if (Number.isFinite(computedBook)) {
               asset.original_book_value_jpy = originalBook;
-              asset.book_value_jpy = computedBook;
+              asset.computed_book_value_jpy = computedBook;
             }
           } else if (asset.class === 'jp_stock') {
             const unitJpy = Number(details.avg_price_jpy || 0);
@@ -1310,7 +1310,7 @@ app.get('/api/assets/:id', async (req, res) => {
             const computedBook = Math.floor(unitJpy * qty);
             if (Number.isFinite(computedBook)) {
               asset.original_book_value_jpy = originalBook;
-              asset.book_value_jpy = computedBook;
+              asset.computed_book_value_jpy = computedBook;
             }
           }
           asset.stock_details = details;

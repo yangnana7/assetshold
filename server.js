@@ -1183,6 +1183,18 @@ app.get('/api/assets', async (req, res) => {
                     asset.ui_market_unit_currency = 'JPY';
                     asset.ui_market_unit_price_label = `${formatted} / g`;
                   }
+                  // USD compatibility for UIs that expect USD column
+                  const unitUsdRoot = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
+                  if (unitUsdRoot) {
+                    asset.market_unit_price_usd = unitUsdRoot;
+                    asset.market_price_usd = unitUsdRoot;
+                    if (!asset.stock_details) {
+                      // Provide a minimal alias object some UIs may touch
+                      asset.stock_details = { market_price_usd: unitUsdRoot };
+                    } else if (asset.stock_details && typeof asset.stock_details === 'object') {
+                      asset.stock_details.market_price_usd = unitUsdRoot;
+                    }
+                  }
                 }
                 if (valuation.value_jpy) {
                   // Use actual market valuation if available
@@ -1284,32 +1296,48 @@ app.get('/api/assets/:id', async (req, res) => {
         // Get latest market valuation for unit price and total value
         db.get('SELECT unit_price_jpy, value_jpy, as_of FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
           if (!err && valuation) {
-            if (valuation.unit_price_jpy) {
-              asset.market_unit_price_jpy = valuation.unit_price_jpy;
-              asset.market_price_jpy = valuation.unit_price_jpy;
-              asset.market_unit_as_of = valuation.as_of;
-              if (asset.precious_metal_details) {
-                asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
-                asset.precious_metal_details.currency = 'JPY';
-                asset.precious_metal_details.market_unit_price_jpy = valuation.unit_price_jpy;
-              }
-              asset.market_unit_price = valuation.unit_price_jpy;
-              asset.market_unit_currency = 'JPY';
-              asset.unit_price_jpy = valuation.unit_price_jpy;
-              asset.unit_price = valuation.unit_price_jpy;
-              asset.unit_currency = 'JPY';
-              try {
-                const fmt = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
-                asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
-                asset.ui_market_unit_currency = 'JPY';
-                asset.ui_market_unit_price_label = `${fmt.format(valuation.unit_price_jpy)} / g`;
-              } catch (_) {
-                const formatted = `¥${Number(valuation.unit_price_jpy).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
-                asset.ui_market_unit_currency = 'JPY';
-                asset.ui_market_unit_price_label = `${formatted} / g`;
-              }
-            }
+                if (valuation.unit_price_jpy) {
+                  asset.market_unit_price_jpy = valuation.unit_price_jpy;
+                  asset.market_price_jpy = valuation.unit_price_jpy;
+                  asset.market_unit_as_of = valuation.as_of;
+                  if (asset.precious_metal_details) {
+                    asset.precious_metal_details.unit_price_jpy = valuation.unit_price_jpy;
+                    asset.precious_metal_details.currency = 'JPY';
+                    asset.precious_metal_details.market_unit_price_jpy = valuation.unit_price_jpy;
+                    // Also provide USD per gram for UIs reusing USD columns
+                    const unitUsd = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
+                    if (unitUsd) {
+                      asset.precious_metal_details.market_unit_price_usd = unitUsd;
+                    }
+                  }
+                  asset.market_unit_price = valuation.unit_price_jpy;
+                  asset.market_unit_currency = 'JPY';
+                  asset.unit_price_jpy = valuation.unit_price_jpy;
+                  asset.unit_price = valuation.unit_price_jpy;
+                  asset.unit_currency = 'JPY';
+                  try {
+                    const fmt = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
+                    asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
+                    asset.ui_market_unit_currency = 'JPY';
+                    asset.ui_market_unit_price_label = `${fmt.format(valuation.unit_price_jpy)} / g`;
+                  } catch (_) {
+                    const formatted = `¥${Number(valuation.unit_price_jpy).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                    asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
+                    asset.ui_market_unit_currency = 'JPY';
+                    asset.ui_market_unit_price_label = `${formatted} / g`;
+                  }
+                  // Root-level USD aliases for UI assuming USD column
+                  const unitUsdRoot = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
+                  if (unitUsdRoot) {
+                    asset.market_unit_price_usd = unitUsdRoot;
+                    asset.market_price_usd = unitUsdRoot;
+                    if (!asset.stock_details) {
+                      asset.stock_details = { market_price_usd: unitUsdRoot };
+                    } else if (asset.stock_details && typeof asset.stock_details === 'object') {
+                      asset.stock_details.market_price_usd = unitUsdRoot;
+                    }
+                  }
+                }
             if (valuation.value_jpy) {
               // Use actual market valuation if available
               asset.current_value_jpy = valuation.value_jpy;

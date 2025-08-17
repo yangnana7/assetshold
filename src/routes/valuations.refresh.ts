@@ -16,7 +16,7 @@ async function refreshValuationHandler(req, res) {
       assetId,
       price_usd: aggregate.price,
       confidence: aggregate.confidence,
-      sources: quotes.map(q=>({ name: q.provider, price: q.price, url: q.url })),
+      sources: quotes.map(q=>({ name: q.provider, price: q.price, currency: q.currency, url: q.url })),
       valuation_id,
       note: `no-API HTML scrape / ${new Date().toISOString()}`,
       keys,

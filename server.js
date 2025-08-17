@@ -2373,40 +2373,74 @@ app.post('/api/valuations/refresh-all', async (req, res) => {
             });
 
             if (details) {
-              if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
-                asset.stock_details = details;
-              } else if (asset.class === 'precious_metal') {
-                asset.precious_metal_details = details;
+              // US stocks use new scrape orchestrator and commit flow
+              if (asset.class === 'us_stock') {
+                const { fetchLatestUSQuote } = require('./src/market/index.ts');
+                const tickerUpper = String(details.ticker || '').toUpperCase();
+                const isORCL = tickerUpper === 'ORCL';
+                const providers = isORCL ? ['google'] : ['google','yahoo'];
+                const opt = isORCL
+                  ? {
+                      providers,
+                      yahooHost: 'com',
+                      googleUrlOverride: 'https://www.google.com/finance/quote/ORCL:NYSE?sa=X&ved=2ahUKEwj5lbij7JGPAxX5e_UHHWDrIJIQ3ecFegQINhAb'
+                    }
+                  : { providers, yahooHost: 'com' };
+                const quote = await fetchLatestUSQuote({ ticker: details.ticker, exchange: details.exchange || 'NYSE' }, opt);
+                const unitPriceUsd = Number(quote.aggregate.price);
+                if (!Number.isFinite(unitPriceUsd) || unitPriceUsd <= 0) {
+                  throw new Error('bulk_bad_quote');
+                }
+                // FX USDJPY
+                const fxData = await fetchWithCache(fxKey('USDJPY'), CACHE_TTL.fx, () => fxProvider.getRate('USDJPY'));
+                const rate = Number(fxData.price);
+                if (!Number.isFinite(rate) || rate <= 0) throw new Error('bulk_bad_fx');
+                const qty = Number(details.quantity || 0);
+                const unitPriceJpy = Math.floor(unitPriceUsd * rate * 100) / 100;
+                const valueJpy = Math.floor(unitPriceUsd * qty * rate);
+                const asOf = new Date().toISOString();
+                const fxContext = JSON.stringify({ pair: 'USDJPY', rate, as_of: fxData.asOf || asOf });
+
+                // Insert valuation row
+                await new Promise((resolve, reject) => {
+                  db.run(
+                    'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
+                    [asset.id, asOf, valueJpy, unitPriceJpy, fxContext],
+                    function(err) { err ? reject(err) : resolve(); }
+                  );
+                });
+                // Update us_stocks.market_price_usd
+                await new Promise((resolve, reject) => {
+                  db.run('UPDATE us_stocks SET market_price_usd = ? WHERE asset_id = ?', [unitPriceUsd, asset.id], (err) => err ? reject(err) : resolve());
+                });
+
+                // Audit + result
+                logAudit('assets', asset.id, 'valuation_refresh_bulk_us', null, { as_of: asOf, value_jpy: valueJpy, unit_price_jpy: unitPriceJpy, fx_context: fxContext },
+                  req.session.user ? req.session.user.id : 'guest');
+                results.push({ asset_id: asset.id, name: asset.name, class: asset.class, value_jpy: valueJpy, market_price_usd: unitPriceUsd });
+                updatedCount++;
+              } else {
+                // JP stocks and precious metals: keep existing calculation path
+                if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
+                  asset.stock_details = details;
+                } else if (asset.class === 'precious_metal') {
+                  asset.precious_metal_details = details;
+                }
+                // Calculate market valuation
+                const valuation = await calculateMarketValue(asset);
+                // Save to valuations table
+                await new Promise((resolve, reject) => {
+                  db.run(
+                    'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
+                    [asset.id, valuation.as_of, valuation.value_jpy, valuation.unit_price_jpy || null, valuation.fx_context],
+                    function(err) { if (err) reject(err); else resolve(); }
+                  );
+                });
+                logAudit('assets', asset.id, 'valuation_refresh_bulk', null, valuation,
+                  req.session.user ? req.session.user.id : 'guest');
+                results.push({ asset_id: asset.id, name: asset.name, class: asset.class, value_jpy: valuation.value_jpy, stale: valuation.stale });
+                updatedCount++;
               }
-
-              // Calculate market valuation
-              const valuation = await calculateMarketValue(asset);
-
-              // Save to valuations table (ensure unit_price_jpy is persisted when available)
-              await new Promise((resolve, reject) => {
-                db.run(
-                  'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
-                  [asset.id, valuation.as_of, valuation.value_jpy, valuation.unit_price_jpy || null, valuation.fx_context],
-                  function(err) {
-                    if (err) reject(err);
-                    else resolve();
-                  }
-                );
-              });
-
-              // Log audit
-              logAudit('assets', asset.id, 'valuation_refresh_bulk', null, valuation, 
-                req.session.user ? req.session.user.id : 'guest');
-
-              results.push({
-                asset_id: asset.id,
-                name: asset.name,
-                class: asset.class,
-                value_jpy: valuation.value_jpy,
-                stale: valuation.stale
-              });
-
-              updatedCount++;
             }
           }
         } catch (error) {
@@ -2445,6 +2479,25 @@ app.get('/api/market/status', (req, res) => {
     },
     now: new Date().toISOString()
   });
+});
+
+// GET /api/market/us-stocks - List US stocks with current market_price_usd for quick verification
+app.get('/api/market/us-stocks', async (req, res) => {
+  try {
+    const sql = `
+      SELECT a.id AS asset_id, a.name, u.ticker, u.exchange, u.quantity,
+             u.avg_price_usd, u.market_price_usd
+      FROM assets a
+      JOIN us_stocks u ON u.asset_id = a.id
+      ORDER BY a.id ASC
+    `;
+    db.all(sql, [], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      return res.json({ now: new Date().toISOString(), count: rows.length, items: rows });
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // GET /api/market/probe - Market data diagnostic probe

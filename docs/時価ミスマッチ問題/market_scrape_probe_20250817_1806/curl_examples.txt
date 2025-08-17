@@ -1,5 +1,0 @@
-# ORCL (NYSE) 診断: USD が必要なら Yahoo は .com を使う
-curl "http://localhost:3009/api/market/probe?ticker=ORCL&exchange=NYSE&providers=yahoo,google,marketwatch&yahoo_host=com" | jq .
-
-# .co.jp を敢えて使う（JPYを返す想定）
-curl "http://localhost:3009/api/market/probe?ticker=ORCL&exchange=NYSE&providers=yahoo,google&yahoo_host=co.jp" | jq .

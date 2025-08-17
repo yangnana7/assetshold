@@ -1171,6 +1171,18 @@ app.get('/api/assets', async (req, res) => {
                   asset.unit_price_jpy = valuation.unit_price_jpy;
                   asset.unit_price = valuation.unit_price_jpy;
                   asset.unit_currency = 'JPY';
+                  // UI-friendly explicit fields
+                  try {
+                    const fmt = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
+                    asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
+                    asset.ui_market_unit_currency = 'JPY';
+                    asset.ui_market_unit_price_label = `${fmt.format(valuation.unit_price_jpy)} / g`;
+                  } catch (_) {
+                    const formatted = `¥${Number(valuation.unit_price_jpy).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                    asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
+                    asset.ui_market_unit_currency = 'JPY';
+                    asset.ui_market_unit_price_label = `${formatted} / g`;
+                  }
                 }
                 if (valuation.value_jpy) {
                   // Use actual market valuation if available
@@ -1286,6 +1298,17 @@ app.get('/api/assets/:id', async (req, res) => {
               asset.unit_price_jpy = valuation.unit_price_jpy;
               asset.unit_price = valuation.unit_price_jpy;
               asset.unit_currency = 'JPY';
+              try {
+                const fmt = new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' });
+                asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
+                asset.ui_market_unit_currency = 'JPY';
+                asset.ui_market_unit_price_label = `${fmt.format(valuation.unit_price_jpy)} / g`;
+              } catch (_) {
+                const formatted = `¥${Number(valuation.unit_price_jpy).toLocaleString('ja-JP', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                asset.ui_market_unit_price_jpy = valuation.unit_price_jpy;
+                asset.ui_market_unit_currency = 'JPY';
+                asset.ui_market_unit_price_label = `${formatted} / g`;
+              }
             }
             if (valuation.value_jpy) {
               // Use actual market valuation if available

@@ -28,7 +28,17 @@ module.exports.refreshValuationHandler = async function(req, res) {
 
     // 1) Fetch USD latest via new orchestrator (Yahoo .com enforced)
     const { fetchLatestUSQuote } = require('../market/index.ts');
-    const q = await fetchLatestUSQuote({ ticker: details.ticker, exchange: details.exchange || 'NYSE' }, { providers: ['google','yahoo'], yahooHost: 'com' });
+    const tickerUpper = String(details.ticker || '').toUpperCase();
+    const isORCL = tickerUpper === 'ORCL';
+    const providers = isORCL ? ['google'] : ['google','yahoo'];
+    const opt = isORCL
+      ? {
+          providers,
+          yahooHost: 'com',
+          googleUrlOverride: 'https://www.google.com/finance/quote/ORCL:NYSE?sa=X&ved=2ahUKEwj5lbij7JGPAxX5e_UHHWDrIJIQ3ecFegQINhAb'
+        }
+      : { providers, yahooHost: 'com' };
+    const q = await fetchLatestUSQuote({ ticker: details.ticker, exchange: details.exchange || 'NYSE' }, opt);
     const unitPriceUsd = Number(q.aggregate.price);
     if (!Number.isFinite(unitPriceUsd) || unitPriceUsd <= 0) {
       return res.status(502).json({ error: 'bad_quote', detail: q });
@@ -81,4 +91,3 @@ module.exports.refreshValuationHandler = async function(req, res) {
     return res.status(500).json({ error: String(e?.message || e) });
   }
 };
-

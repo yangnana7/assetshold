@@ -1,6 +1,6 @@
 const { fetchHtml } = require('../fetchHtml.ts');
 async function fetchGoogle(key, opt) {
-  const url = `https://www.google.com/finance/quote/${encodeURIComponent(key)}`;
+  const url = (opt && opt.urlOverride) ? opt.urlOverride : `https://www.google.com/finance/quote/${encodeURIComponent(key)}`;
   const html = (opt && opt.html) || await fetchHtml(url);
   const patterns = [
     /data-last-price\s*=\s*"([0-9]+\.?[0-9]*)"/i,

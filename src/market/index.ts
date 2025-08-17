@@ -11,7 +11,7 @@ async function fetchLatestUSQuote(input, opt) {
   const yahooHost = (opt && opt.yahooHost) || "com";
   const tasks = providers.map(p => {
     if (p === "yahoo") return yahooHost === "co.jp" ? fetchYahooJp(keys.yahoo) : fetchYahooCom(keys.yahoo);
-    if (p === "google") return fetchGoogle(keys.google);
+    if (p === "google") return fetchGoogle(keys.google, opt && opt.googleUrlOverride ? { urlOverride: opt.googleUrlOverride } : undefined);
     return fetchMarketWatch(keys.marketwatch);
   });
   const settled = await Promise.allSettled(tasks);

@@ -3,7 +3,6 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import Header from './components/Header'
 import Dashboard from './pages/Dashboard'
 import AssetList from './pages/AssetList'
-import ImportExport from './pages/Import'
 import Login from './pages/Login'
 import UserManagement from './pages/UserManagement'
 import Duplicates from './pages/Duplicates'
@@ -32,8 +31,6 @@ function App() {
     switch (currentPage) {
       case 'assets':
         return user && user.role === 'admin' ? <AssetList /> : <Dashboard />
-      case 'import':
-        return user && user.role === 'admin' ? <ImportExport /> : <Dashboard />
       case 'users':
         return user && user.role === 'admin' ? <UserManagement /> : <Dashboard />
       case 'duplicates':

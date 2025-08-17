@@ -12,10 +12,15 @@ async function getGoldJPYPerGram() {
   // Normalize whitespace to make regex matching robust across layout changes
   const norm = html.replace(/\r?\n|\t/g, ' ').replace(/\s+/g, ' ');
 
-  // Try a couple of patterns around the 金 (gold) label followed by a numeric cell
+  // Try multiple patterns to extract gold price
   const patterns = [
+    // Original patterns for 金 (gold) label
     /<th[^>]*>\s*金\s*<\/th>\s*<td[^>]*>\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*<\/td>/i,
     /金[^<]*<\/(?:th|td)>\s*<td[^>]*>\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)\s*<\/td>/i,
+    // New patterns for retail price structure
+    /店頭小売価格[^>]*>\s*([0-9,]+)\s*円/i,
+    /([0-9,]+)\s*円.*?小売/i,
+    /小売.*?([0-9,]+)\s*円/i,
   ];
 
   let m = null;

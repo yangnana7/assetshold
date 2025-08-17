@@ -282,7 +282,7 @@ export default function Dashboard() {
                     } else if (cls === 'precious_metal') {
                       // Treat weight as quantity; unit prices may be provided
                       bUnitJpy = a.precious_metal_details?.unit_price_jpy ?? null
-                      mUnitJpy = null // No live market unit in dashboard list
+                      mUnitJpy = (a.current_value_jpy && qty > 0) ? (a.current_value_jpy / qty) : null
                     }
 
                     const bookTotal = a.book_value_jpy || 0

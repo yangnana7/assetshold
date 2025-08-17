@@ -1153,6 +1153,16 @@ app.get('/api/assets', async (req, res) => {
               asset.unit_price_jpy = details.unit_price_jpy || null;
               asset.unit_price = details.unit_price_jpy || null;
               asset.unit_currency = 'JPY';
+              // Dashboard compatibility: mirror minimal fields into stock_details
+              const unitUsdFromBook = usdJpyRate && usdJpyRate > 0 ? Math.round(((details.unit_price_jpy || 0) / usdJpyRate) * 100) / 100 : null;
+              if (!asset.stock_details) asset.stock_details = {};
+              if (asset.stock_details && typeof asset.stock_details === 'object') {
+                asset.stock_details.unit_currency = 'JPY';
+                asset.stock_details.market_price_jpy = details.unit_price_jpy || null;
+                if (unitUsdFromBook) asset.stock_details.market_price_usd = unitUsdFromBook;
+                if (asset.stock_details.quantity == null) asset.stock_details.quantity = 1;
+                if (asset.stock_details.avg_price_usd == null && unitUsdFromBook) asset.stock_details.avg_price_usd = unitUsdFromBook;
+              }
             }
             
             // Get latest market valuation for unit price and total value

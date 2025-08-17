@@ -125,6 +125,13 @@ app.set('db', db);
 app.set('fxProvider', fxProvider);
 app.set('CACHE_TTL', CACHE_TTL);
 app.set('fetchWithCache', fetchWithCache);
+app.set('dataDir', dataDir);
+app.set('dbPath', dbPath);
+
+// Debug routes (server debug patch)
+const debugRoutes = require('./src/routes/debug.tools');
+app.get('/api/debug/version', debugRoutes.version);
+app.get('/api/debug/asset/:assetId', debugRoutes.assetTrace);
 
 // Function to calculate current market value for assets
 function calculateCurrentValue(asset) {

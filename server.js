@@ -128,10 +128,7 @@ app.set('fetchWithCache', fetchWithCache);
 app.set('dataDir', dataDir);
 app.set('dbPath', dbPath);
 
-// Debug routes (server debug patch)
-const debugRoutes = require('./src/routes/debug.tools');
-app.get('/api/debug/version', debugRoutes.version);
-app.get('/api/debug/asset/:assetId', debugRoutes.assetTrace);
+// Debug routes removed - see git history if needed
 
 // Function to calculate current market value for assets
 function calculateCurrentValue(asset) {

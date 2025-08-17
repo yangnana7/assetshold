@@ -1310,6 +1310,15 @@ app.get('/api/assets/:id', async (req, res) => {
                       asset.precious_metal_details.market_unit_price_usd = unitUsd;
                     }
                   }
+                  // Also mirror into stock_details for UIs that read from stock_details regardless of class
+                  if (!asset.stock_details) asset.stock_details = {};
+                  if (asset.stock_details && typeof asset.stock_details === 'object') {
+                    asset.stock_details.unit_price_jpy = valuation.unit_price_jpy;
+                    asset.stock_details.market_price_jpy = valuation.unit_price_jpy;
+                    asset.stock_details.unit_currency = 'JPY';
+                    const unitUsd = usdJpyRate && usdJpyRate > 0 ? Math.round((valuation.unit_price_jpy / usdJpyRate) * 100) / 100 : null;
+                    if (unitUsd) asset.stock_details.market_price_usd = unitUsd;
+                  }
                   asset.market_unit_price = valuation.unit_price_jpy;
                   asset.market_unit_currency = 'JPY';
                   asset.unit_price_jpy = valuation.unit_price_jpy;

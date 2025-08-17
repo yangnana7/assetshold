@@ -659,7 +659,10 @@ app.get('/api/dashboard', async (req, res) => {
     monthlyTrend: `
       SELECT 
         strftime('%Y-%m', a.created_at) as month,
-        SUM(a.book_value_jpy) as book_value_total,
+        SUM(CASE 
+              WHEN a.class='us_stock' THEN COALESCE(us.avg_price_usd,0)*COALESCE(us.quantity,0)*?
+              ELSE a.book_value_jpy
+            END) as book_value_total,
         SUM(
           COALESCE(v.value_jpy,
             CASE 
@@ -695,7 +698,7 @@ app.get('/api/dashboard', async (req, res) => {
   const total = Object.keys(queries).length;
   
   Object.entries(queries).forEach(([key, query]) => {
-    const params = key === 'monthlyTrend' ? [usdJpyRate] : [];
+    const params = key === 'monthlyTrend' ? [usdJpyRate, usdJpyRate] : [];
     db.all(query, params, (err, rows) => {
       if (!err) {
         results[key] = rows;
@@ -723,7 +726,10 @@ app.get('/api/dashboard/class-summary', async (req, res) => {
   const query = `
     SELECT
       a.class AS class,
-      SUM(a.book_value_jpy) AS book_total_jpy,
+      SUM(CASE 
+            WHEN a.class='us_stock' THEN COALESCE(us.avg_price_usd,0)*COALESCE(us.quantity,0)*?
+            ELSE a.book_value_jpy
+          END) AS book_total_jpy,
       SUM(
         COALESCE(
           (SELECT v.value_jpy
@@ -748,7 +754,7 @@ app.get('/api/dashboard/class-summary', async (req, res) => {
     ORDER BY book_total_jpy DESC
   `;
 
-  db.all(query, [usdJpyRate], (err, rows) => {
+  db.all(query, [usdJpyRate, usdJpyRate], (err, rows) => {
     if (err) {
       console.error('Class summary query error:', err);
       return res.status(500).json({ error: 'データベースクエリエラー' });
@@ -1032,6 +1038,8 @@ app.get('/api/assets', async (req, res) => {
                 if (Number.isFinite(computedBook)) {
                   asset.original_book_value_jpy = originalBook;
                   asset.computed_book_value_jpy = computedBook;
+                  // Policy: US stocks' book value adheres to USD book * qty * current USDJPY
+                  asset.book_value_jpy = computedBook;
                 }
               } else {
                 const computedBook = Math.floor(unit * qty);
@@ -1303,6 +1311,8 @@ app.get('/api/assets/:id', async (req, res) => {
             if (Number.isFinite(computedBook)) {
               asset.original_book_value_jpy = originalBook;
               asset.computed_book_value_jpy = computedBook;
+              // Policy: override displayed book value for US stocks based on USD book * qty * current USDJPY
+              asset.book_value_jpy = computedBook;
             }
           } else if (asset.class === 'jp_stock') {
             const unitJpy = Number(details.avg_price_jpy || 0);

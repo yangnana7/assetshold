@@ -25,12 +25,13 @@ function Header({ user, currentPage, onPageChange, onLogout }) {
             >
               ユーザー管理
             </button>
-            <button
+            {/* 重複統合ページは廃止: 新規登録フローに統合機能を内包 */}
+            {/* <button
               className={currentPage === 'duplicates' ? 'active' : ''}
               onClick={() => onPageChange('duplicates')}
             >
               重複統合
-            </button>
+            </button> */}
           </nav>
         )}
         

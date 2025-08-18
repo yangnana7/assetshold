@@ -3,7 +3,7 @@
 -- Purpose: Store unit price information for better market data tracking
 
 -- Add unit_price_jpy column to valuations table
-ALTER TABLE valuations ADD COLUMN unit_price_jpy REAL;
+-- ALTER TABLE valuations ADD COLUMN unit_price_jpy REAL; -- Column already exists
 
 -- Create index for efficient asset valuation lookups
 -- ORDER BY as_of DESC, id DESC ensures we get the most recent valuation

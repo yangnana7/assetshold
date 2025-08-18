@@ -176,7 +176,8 @@ function AssetList() {
           onSave={async (updated) => {
             // Refresh list then close
             await fetchAssets()
-            handleAssetUpdated(updated)
+            setIsEditOpen(false)
+            setEditingAsset(null)
           }}
         />
       )}

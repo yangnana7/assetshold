@@ -29,6 +29,7 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
   const [showPreview, setShowPreview] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [newAccount, setNewAccount] = useState({ broker: '', account_type: 'tokutei', name: '' });
 
   // アセットデータをフォームに設定
   useEffect(() => {
@@ -52,6 +53,24 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
     }
   }, [asset]);
 
+  // アセット詳細（stock_details）からフォーム値を補完
+  useEffect(() => {
+    if (!asset || !asset.stock_details) return;
+    const sd = asset.stock_details;
+    const isUS = asset.class === 'us_stock';
+    const isJP = asset.class === 'jp_stock';
+    setFormData(prev => ({
+      ...prev,
+      account_id: (sd.account_id ?? prev.account_id) || '',
+      ticker: isUS ? (sd.ticker || prev.ticker) : prev.ticker,
+      exchange: isUS ? (sd.exchange || prev.exchange || 'NASDAQ') : prev.exchange,
+      quantity: (isUS || isJP) ? (sd.quantity ?? prev.quantity) : prev.quantity,
+      avg_price_usd: isUS ? (sd.avg_price_usd ?? prev.avg_price_usd) : prev.avg_price_usd,
+      code: isJP ? (sd.code || prev.code) : prev.code,
+      avg_price_jpy: isJP ? (sd.avg_price_jpy ?? prev.avg_price_jpy) : prev.avg_price_jpy,
+    }));
+  }, [asset]);
+
   // 口座一覧の取得
   useEffect(() => {
     if (isOpen) {
@@ -65,6 +84,23 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
       setAccounts(response.data);
     } catch (error) {
       console.error('Failed to fetch accounts:', error);
+    }
+  };
+
+  // 口座新規作成（編集モーダル内）
+  const handleCreateAccount = async () => {
+    if (!newAccount.broker || !newAccount.account_type) {
+      setErrors(prev => ({ ...prev, account_id: '証券会社と口座種別は必須です' }));
+      return;
+    }
+    try {
+      const res = await axios.post('/api/accounts', newAccount, { withCredentials: true });
+      setAccounts(prev => [res.data, ...prev]);
+      setFormData(prev => ({ ...prev, account_id: res.data.id }));
+      setShowAccountModal(false);
+      setNewAccount({ broker: '', account_type: 'tokutei', name: '' });
+    } catch (err) {
+      setErrors(prev => ({ ...prev, account_id: err.response?.data?.error || '口座作成に失敗しました' }));
     }
   };
 
@@ -502,6 +538,47 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
       </div>
 
       {renderPreviewModal()}
+
+      {showAccountModal && (
+        <div className="modal-overlay" style={{ zIndex: 1002 }}>
+          <div className="modal-content">
+            <h3>口座を新規作成</h3>
+            <div className="form-row">
+              <label>証券会社</label>
+              <input
+                type="text"
+                value={newAccount.broker}
+                onChange={(e) => setNewAccount(prev => ({ ...prev, broker: e.target.value }))}
+                placeholder="例: SBI証券"
+              />
+            </div>
+            <div className="form-row">
+              <label>口座種別</label>
+              <select
+                value={newAccount.account_type}
+                onChange={(e) => setNewAccount(prev => ({ ...prev, account_type: e.target.value }))}
+              >
+                <option value="tokutei">特定</option>
+                <option value="ippan">一般</option>
+                <option value="nisa">NISA</option>
+              </select>
+            </div>
+            <div className="form-row">
+              <label>表示名（任意）</label>
+              <input
+                type="text"
+                value={newAccount.name}
+                onChange={(e) => setNewAccount(prev => ({ ...prev, name: e.target.value }))}
+                placeholder="例: SBI/特定"
+              />
+            </div>
+            <div className="modal-buttons">
+              <button type="button" onClick={() => setShowAccountModal(false)}>キャンセル</button>
+              <button type="button" onClick={handleCreateAccount}>保存する</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

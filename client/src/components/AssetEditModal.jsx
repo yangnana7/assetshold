@@ -314,22 +314,24 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
 
             <div className="form-row">
               <label>口座:</label>
-              <select
-                name="account_id"
-                value={formData.account_id}
-                onChange={handleInputChange}
-                className={errors.account_id ? 'error' : ''}
-              >
-                <option value="">口座を選択してください</option>
-                {accounts.map(account => (
-                  <option key={account.id} value={account.id}>
-                    {account.name || `${account.broker}/${account.account_type}`}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={() => setShowAccountModal(true)}>
-                口座を新規作成
-              </button>
+              <div className="form-row-buttons">
+                <select
+                  name="account_id"
+                  value={formData.account_id}
+                  onChange={handleInputChange}
+                  className={errors.account_id ? 'error' : ''}
+                >
+                  <option value="">口座を選択してください</option>
+                  {accounts.map(account => (
+                    <option key={account.id} value={account.id}>
+                      {account.name || `${account.broker}/${account.account_type}`}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => setShowAccountModal(true)}>
+                  口座を新規作成
+                </button>
+              </div>
               {errors.account_id && <span className="error-text">{errors.account_id}</span>}
             </div>
 

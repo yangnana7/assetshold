@@ -1,92 +1,229 @@
+/* 編集モーダル - 新規登録モーダルと統一されたスタイル */
+
 .modal-overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
-  z-index: 1000;
+  z-index: 50;
 }
 
 .modal-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
   width: 100%;
-  max-width: 720px;
+  max-width: 800px;
   max-height: 90vh;
-  background: #ffffff;
-  color: #111;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
   overflow-y: auto;
-  padding: 20px;
+  margin: 16px;
+}
+
+.modal-content h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 24px 0;
+  color: #1f2937;
+  padding: 16px 24px 0 24px;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 16px;
+}
+
+.modal-content h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: #1f2937;
+}
+
+.modal-content form {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .form-row {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 8px 12px;
-  align-items: center;
-  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .form-row label {
-  font-size: 13px;
-  color: #333;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 4px;
 }
 
 .form-row input,
 .form-row select,
 .form-row textarea {
   width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid #d1d5db;
-  border-radius: 8px;
-  background: #fff;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
 }
 
-.form-row textarea {
-  resize: vertical;
+.form-row input:focus,
+.form-row select:focus,
+.form-row textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
-.error {
-  border-color: #ef4444 !important;
-  background: #fff7f7;
+.form-row input:disabled {
+  background-color: #f9fafb;
+  color: #6b7280;
+  cursor: not-allowed;
+}
+
+.form-row .error {
+  border-color: #ef4444;
 }
 
 .error-text {
-  grid-column: 2 / -1;
-  font-size: 12px;
   color: #ef4444;
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+.form-row-buttons select {
+  flex: 1;
+}
+
+.form-row-buttons button {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  transition: background-color 0.2s;
+}
+
+.form-row-buttons button:hover {
+  background-color: #f9fafb;
 }
 
 .modal-buttons {
-  margin-top: 16px;
   display: flex;
-  gap: 10px;
+  gap: 12px;
   justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  margin-top: 20px;
 }
 
 .modal-buttons button {
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 8px 16px;
   border: 1px solid #d1d5db;
-  background: #f9fafb;
+  border-radius: 6px;
+  font-size: 0.875rem;
   cursor: pointer;
+  transition: all 0.2s;
+  background: white;
+  min-width: 80px;
 }
 
-.modal-buttons button:hover {
-  background: #eef2f7;
+.modal-buttons button:hover:not(:disabled) {
+  background-color: #f9fafb;
+}
+
+.modal-buttons button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.modal-buttons button[type="submit"],
+.modal-buttons button:last-child {
+  background-color: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
+
+.modal-buttons button[type="submit"]:hover:not(:disabled),
+.modal-buttons button:last-child:hover:not(:disabled) {
+  background-color: #2563eb;
 }
 
 .merge-preview,
 .edit-preview {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  background: #f8fafc;
+  background-color: #f9fafb;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  margin: 10px 0 4px;
+  border-radius: 6px;
+  padding: 16px;
+  margin: 16px 0;
+}
+
+.merge-preview div,
+.edit-preview div {
+  margin-bottom: 8px;
+  color: #374151;
+  font-size: 0.875rem;
+}
+
+.error-message {
+  color: #ef4444;
+  font-size: 0.875rem;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 24px 0 16px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.section-title:first-of-type {
+  margin-top: 0;
+}
+
+/* 口座選択の追加ボタンを横に配置 */
+.form-row .form-row-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-top: 4px;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 768px) {
+  .modal-content {
+    margin: 8px;
+    max-height: 95vh;
+  }
+  
+  .modal-content form {
+    padding: 16px;
+    gap: 16px;
+  }
+  
+  .modal-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .modal-buttons button {
+    width: 100%;
+  }
 }
 

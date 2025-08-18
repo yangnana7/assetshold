@@ -1942,175 +1942,429 @@ app.post('/api/assets', requireAuth, async (req, res) => {
   }
 });
 
-app.patch('/api/assets/:id', requireAdmin, (req, res) => {
+app.patch('/api/assets/:id', requireAdmin, async (req, res) => {
   const assetId = parseInt(req.params.id);
+  const isDryRun = req.body.dry_run === true;
   
-  
-  const {
-    class: assetClass,
-    quantity,
-    avg_price_usd,
-    avg_price_jpy,
-    weight_g,
-    unit_book_cost_jpy_per_gram,
-    recalc = 'auto',
-    refresh_market = true,
-    // Legacy fields for existing functionality
-    name,
-    note,
-    acquired_at,
-    book_value_jpy,
-    valuation_source,
-    liquidity_tier,
-    tags
-  } = req.body;
+  try {
+    const {
+      class: assetClass,
+      name,
+      note,
+      acquired_at,
+      liquidity_tier,
+      tags,
+      valuation_source,
+      account_id,
+      account, // 新規口座作成用
+      // US株専用
+      ticker,
+      exchange,
+      quantity: usQuantity,
+      avg_price_usd,
+      fx_at_acq,
+      // JP株専用
+      code,
+      quantity: jpQuantity,
+      avg_price_jpy,
+      // 再計算モード
+      recalc = 'auto'
+    } = req.body;
 
-  // クラス別の数量/詳細編集トリガー（いずれかのクラス別フィールドが含まれていれば統合処理へ）
-  const classSpecificKeys = ['quantity','weight_g','avg_price_usd','avg_price_jpy','purity','unit_price_jpy','exchange','code','ticker'];
-  const isClassSpecificEdit = !!assetClass && classSpecificKeys.some(k => Object.prototype.hasOwnProperty.call(req.body, k));
-  
-
-  if (isClassSpecificEdit) {
-    // 数量・詳細編集の統合処理
+    // バリデーション
     if (!assetClass) {
-      return res.status(400).json({ error: 'Asset class is required' });
+      return res.status(400).json({ error: 'class_required' });
     }
 
-    // Start immediate transaction
-    db.serialize(() => {
-      db.run('BEGIN IMMEDIATE', (err) => {
-        if (err) {
-          return res.status(500).json({ error: 'Failed to start transaction' });
-        }
+    // 現在の資産データ取得
+    const currentAsset = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, row) => {
+        if (err) return reject(err);
+        if (!row) return reject(new Error('not_found'));
+        resolve(row);
+      });
+    });
 
-        // Get current asset data
-        db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, asset) => {
-          if (err) {
-            db.run('ROLLBACK');
-            return res.status(500).json({ error: err.message });
-          }
-          if (!asset) {
-            db.run('ROLLBACK');
-            return res.status(404).json({ error: 'Asset not found' });
-          }
-          if (asset.class !== assetClass) {
-            db.run('ROLLBACK');
-            return res.status(400).json({ error: 'Asset class mismatch' });
-          }
+    if (currentAsset.class !== assetClass) {
+      return res.status(400).json({ error: 'Asset class cannot be changed' });
+    }
 
-          // Update class-specific data
-          updateClassSpecificData(asset, assetId, req.body, (err) => {
-            if (err) {
-              db.run('ROLLBACK');
-              return res.status(400).json({ error: err.message });
-            }
-
-            // Recalculate book value
-            const recalcOptions = {
-              class: assetClass,
-              recalc,
-              newQuantity: quantity,
-              newWeight: weight_g,
-              avgPriceUsd: avg_price_usd,
-              avgPriceJpy: avg_price_jpy,
-              unitBookCostJpyPerGram: unit_book_cost_jpy_per_gram
-            };
-
-            recalcBookValue(db, assetId, recalcOptions)
-              .then(newBookValue => {
-                // Update asset book value and common fields
-                const commonUpdates = {};
-                const allowedCommonFields = ['name', 'note', 'acquired_at', 'valuation_source', 'liquidity_tier', 'tags'];
-                
-                // Collect common fields from request
-                allowedCommonFields.forEach(field => {
-                  if (req.body.hasOwnProperty(field)) {
-                    commonUpdates[field] = req.body[field];
-                  }
-                });
-                
-                // Always update book_value_jpy and updated_at
-                commonUpdates.book_value_jpy = newBookValue;
-                commonUpdates.updated_at = new Date().toISOString();
-                
-                // Build dynamic UPDATE query
-                const setClause = Object.keys(commonUpdates).map(key => `${key} = ?`).join(', ');
-                const values = Object.values(commonUpdates);
-                values.push(assetId);
-                
-                db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, (err) => {
-                  if (err) {
-                    db.run('ROLLBACK');
-                    return res.status(500).json({ error: err.message });
-                  }
-
-                  // Commit transaction
-                  db.run('COMMIT', (err) => {
-                    if (err) {
-                      return res.status(500).json({ error: 'Failed to commit transaction' });
-                    }
-
-                    // Return updated asset with all changes
-                    const updatedAsset = { ...asset, ...commonUpdates };
-                    res.json({
-                      ok: true,
-                      asset: updatedAsset
-                    });
-                  });
-                });
-              })
-              .catch(err => {
-                db.run('ROLLBACK');
-                res.status(400).json({ error: err.message });
-              });
-          });
+    // 現在のクラス別データ取得
+    let currentClassData;
+    if (assetClass === 'us_stock') {
+      currentClassData = await new Promise((resolve, reject) => {
+        db.get('SELECT * FROM us_stocks WHERE asset_id = ?', [assetId], (err, row) => {
+          if (err) return reject(err);
+          resolve(row);
         });
       });
-    });
-  } else {
-    // Legacy asset field editing logic
-    db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, currentAsset) => {
-      if (err || !currentAsset) {
-        return res.status(404).json({ error: 'Asset not found' });
-      }
-      
-      const updates = {};
-      const allowedFields = ['name', 'note', 'acquired_at', 'book_value_jpy', 'valuation_source', 'liquidity_tier', 'tags'];
-      
-      allowedFields.forEach(field => {
-        if (req.body.hasOwnProperty(field)) {
-          updates[field] = req.body[field];
-        }
+    } else if (assetClass === 'jp_stock') {
+      currentClassData = await new Promise((resolve, reject) => {
+        db.get('SELECT * FROM jp_stocks WHERE asset_id = ?', [assetId], (err, row) => {
+          if (err) return reject(err);
+          resolve(row);
+        });
       });
-      
-      if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
+    if (!currentClassData) {
+      return res.status(404).json({ error: 'Class-specific data not found' });
+    }
+
+    // 新規口座作成処理
+    let finalAccountId = account_id || currentClassData.account_id;
+    if (account && !account_id) {
+      const { broker, account_type, name: accountName } = account;
+      if (!broker || !account_type) {
+        return res.status(400).json({ error: 'account_required' });
       }
       
-      // Special handling for note field - ensure empty string not null
-      if (updates.hasOwnProperty('note') && !updates.note) {
-        updates.note = "";
+      if (!isDryRun) {
+        finalAccountId = await new Promise((resolve, reject) => {
+          db.run(
+            'INSERT INTO accounts (broker, account_type, name) VALUES (?, ?, ?)',
+            [broker, account_type, accountName || `${broker}/${account_type}`],
+            function(err) {
+              if (err) return reject(err);
+              resolve(this.lastID);
+            }
+          );
+        });
+      } else {
+        finalAccountId = 9999; // dry_run用のダミーID
+      }
+    }
+
+    // 編集内容の準備
+    const editData = { ...req.body };
+    editData.account_id = finalAccountId;
+    
+    // クラス別の数量・識別子
+    const quantity = assetClass === 'us_stock' ? usQuantity : jpQuantity;
+    const identifier = assetClass === 'us_stock' ? 
+      (ticker || currentClassData.ticker) : 
+      (code || currentClassData.code);
+
+    // 統合チェック: 編集によって既存の別のポジションとキーが衝突するか
+    let mergeTarget = null;
+    const normalizedIdentifier = identifier ? identifier.toString().trim().toUpperCase() : '';
+    
+    if ((account_id && account_id !== currentClassData.account_id) || 
+        (ticker && ticker.toUpperCase() !== currentClassData.ticker?.toUpperCase()) ||
+        (code && code.trim().toUpperCase() !== currentClassData.code?.toUpperCase())) {
+      
+      // キーが変更される場合は統合対象を検索
+      mergeTarget = await findMergeTarget(db, assetClass, normalizedIdentifier, finalAccountId);
+      
+      // 自分自身は除外
+      if (mergeTarget && mergeTarget.id === assetId) {
+        mergeTarget = null;
+      }
+    }
+
+    let result;
+    
+    if (mergeTarget) {
+      // 統合が発生する場合
+      const { mergeUsPosition, mergeJpPosition } = require('./server/utils/merge');
+      
+      let mergeResult;
+      if (assetClass === 'us_stock') {
+        // US株の統合
+        const oldQty = mergeTarget.quantity || 0;
+        const oldAvgUsd = mergeTarget.avg_price_usd || 0;
+        const oldBookJpy = mergeTarget.book_value_jpy || 0;
+        const newQty = quantity !== undefined ? quantity : currentClassData.quantity;
+        const newAvgUsd = avg_price_usd !== undefined ? avg_price_usd : currentClassData.avg_price_usd;
+        const fxRate = fx_at_acq || null;
+        
+        // 編集時統合では現在の資産を統合対象に追加する形で計算
+        mergeResult = mergeUsPosition({
+          oldQty,
+          oldAvgUsd,
+          oldBookJpy,
+          addQty: newQty,
+          addAvgUsd: newAvgUsd,
+          fxAtAcq: fxRate
+        });
+        
+      } else if (assetClass === 'jp_stock') {
+        // JP株の統合
+        const oldQty = mergeTarget.quantity || 0;
+        const oldAvgJpy = mergeTarget.avg_price_jpy || 0;
+        const oldBookJpy = mergeTarget.book_value_jpy || 0;
+        const newQty = quantity !== undefined ? quantity : currentClassData.quantity;
+        const newAvgJpy = avg_price_jpy !== undefined ? avg_price_jpy : currentClassData.avg_price_jpy;
+        
+        // 編集時統合では現在の資産を統合対象に追加する形で計算
+        mergeResult = mergeJpPosition({
+          oldQty,
+          oldAvgJpy,
+          oldBookJpy,
+          addQty: newQty,
+          addAvgJpy: newAvgJpy
+        });
+      }
+
+      if (isDryRun) {
+        // プレビュー用レスポンス
+        result = {
+          merged: true,
+          before: {
+            qty: mergeTarget.quantity,
+            [assetClass === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+              assetClass === 'us_stock' ? mergeTarget.avg_price_usd : mergeTarget.avg_price_jpy,
+            book_jpy: mergeTarget.book_value_jpy
+          },
+          after: {
+            qty: mergeResult.newQty,
+            [assetClass === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+              assetClass === 'us_stock' ? mergeResult.newAvgUsd : mergeResult.newAvgJpy,
+            book_jpy: mergeResult.newBookJpy
+          },
+          method: mergeResult.method
+        };
+      } else {
+        // 実際の統合実行
+        result = await performAssetMerge(db, assetId, mergeTarget.id, mergeResult, editData, getUserId(req));
       }
       
-      updates.updated_at = new Date().toISOString();
-      
-      const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
-      const values = Object.values(updates);
-      values.push(assetId);
-      
-      db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, function(err) {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
-        
-        const updatedAsset = { ...currentAsset, ...updates, id: parseInt(assetId) };
-        logAudit('assets', assetId, 'UPDATE', currentAsset, updatedAsset, getUserId(req));
-        
-        res.json(updatedAsset);
-      });
-    });
+    } else {
+      // 通常の編集（統合なし）
+      if (isDryRun) {
+        // プレビュー用レスポンス
+        result = {
+          merged: false,
+          preview: {
+            class: assetClass,
+            account_id: finalAccountId,
+            ...editData
+          }
+        };
+      } else {
+        // 実際の編集実行
+        result = await performAssetEdit(db, assetId, editData, currentAsset, currentClassData, getUserId(req));
+      }
+    }
+
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Asset edit error:', error);
+    const errorCode = error.message || 'internal_error';
+    res.status(500).json({ error: errorCode });
   }
 });
+
+// 編集時のヘルパー関数
+async function performAssetMerge(db, editingAssetId, targetAssetId, mergeResult, editData, userId) {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN IMMEDIATE', (err) => {
+        if (err) return reject(err);
+
+        // 統合先の資産を更新
+        const updates = [];
+        const values = [];
+        
+        // クラス別テーブルを更新（assetsテーブルではなく）
+        let classTableUpdatePromise;
+        
+        if (editData.class === 'us_stock') {
+          classTableUpdatePromise = new Promise((resolve, reject) => {
+            db.run(
+              'UPDATE us_stocks SET quantity = ?, avg_price_usd = ? WHERE asset_id = ?',
+              [mergeResult.newQty, mergeResult.newAvgUsd, targetAssetId],
+              (err) => {
+                if (err) return reject(err);
+                resolve();
+              }
+            );
+          });
+        } else if (editData.class === 'jp_stock') {
+          classTableUpdatePromise = new Promise((resolve, reject) => {
+            db.run(
+              'UPDATE jp_stocks SET quantity = ?, avg_price_jpy = ? WHERE asset_id = ?',
+              [mergeResult.newQty, mergeResult.newAvgJpy, targetAssetId],
+              (err) => {
+                if (err) return reject(err);
+                resolve();
+              }
+            );
+          });
+        }
+
+        // クラス別テーブル更新を実行
+        if (classTableUpdatePromise) {
+          classTableUpdatePromise.then(() => {
+            // クラス別テーブル更新成功後にassetsテーブルを更新
+            updateAssetsTable();
+          }).catch(err => {
+            db.run('ROLLBACK');
+            return reject(err);
+          });
+        } else {
+          updateAssetsTable();
+        }
+        
+        function updateAssetsTable() {
+          // assetsテーブルの簿価を更新
+          db.run('UPDATE assets SET book_value_jpy = ?, updated_at = ? WHERE id = ?', 
+            [mergeResult.newBookJpy, new Date().toISOString(), targetAssetId], (err) => {
+            if (err) {
+              db.run('ROLLBACK');
+              return reject(err);
+            }
+
+            // 編集対象の資産を削除
+            db.run('DELETE FROM assets WHERE id = ?', [editingAssetId], (err) => {
+              if (err) {
+                db.run('ROLLBACK');
+                return reject(err);
+              }
+
+              // 監査ログ記録
+              logAudit('assets', targetAssetId, 'ASSET_EDIT_MERGE', 
+                { editing_asset_id: editingAssetId },
+                { 
+                  qty: mergeResult.newQty,
+                  avg_price: editData.class === 'us_stock' ? mergeResult.newAvgUsd : mergeResult.newAvgJpy,
+                  book_jpy: mergeResult.newBookJpy,
+                  method: mergeResult.method
+                },
+                userId
+              );
+
+              db.run('COMMIT', (err) => {
+                if (err) return reject(err);
+                resolve({
+                  merged: true,
+                  kept_asset_id: targetAssetId,
+                  before: {
+                    qty: editData.class === 'us_stock' ? mergeResult.oldQty : mergeResult.oldQty,
+                    [editData.class === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+                      editData.class === 'us_stock' ? mergeResult.oldAvgUsd : mergeResult.oldAvgJpy,
+                    book_jpy: mergeResult.oldBookJpy
+                  },
+                  after: {
+                    qty: mergeResult.newQty,
+                    [editData.class === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+                      editData.class === 'us_stock' ? mergeResult.newAvgUsd : mergeResult.newAvgJpy,
+                    book_jpy: mergeResult.newBookJpy
+                  },
+                  method: mergeResult.method,
+                  audit_id: 'generated'
+                });
+              });
+            });
+          });
+        }
+      });
+    });
+  });
+}
+
+async function performAssetEdit(db, assetId, editData, currentAsset, currentClassData, userId) {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN IMMEDIATE', (err) => {
+        if (err) return reject(err);
+
+        // assetsテーブルの更新
+        const assetUpdates = {};
+        const allowedAssetFields = ['name', 'note', 'acquired_at', 'liquidity_tier', 'tags', 'valuation_source'];
+        
+        allowedAssetFields.forEach(field => {
+          if (editData.hasOwnProperty(field)) {
+            assetUpdates[field] = editData[field];
+          }
+        });
+        
+        assetUpdates.updated_at = new Date().toISOString();
+        
+        if (Object.keys(assetUpdates).length > 1) { // updated_at以外にも更新項目がある場合
+          const setClause = Object.keys(assetUpdates).map(key => `${key} = ?`).join(', ');
+          const values = Object.values(assetUpdates).concat([assetId]);
+          
+          db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, (err) => {
+            if (err) {
+              db.run('ROLLBACK');
+              return reject(err);
+            }
+          });
+        }
+
+        // クラス別テーブルの更新
+        const updateClassData = () => {
+          if (editData.class === 'us_stock') {
+            const updates = {};
+            if (editData.ticker !== undefined) updates.ticker = editData.ticker.toUpperCase();
+            if (editData.exchange !== undefined) updates.exchange = editData.exchange;
+            if (editData.quantity !== undefined) updates.quantity = editData.quantity;
+            if (editData.avg_price_usd !== undefined) updates.avg_price_usd = editData.avg_price_usd;
+            if (editData.account_id !== undefined) updates.account_id = editData.account_id;
+            
+            if (Object.keys(updates).length > 0) {
+              const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+              const values = Object.values(updates).concat([assetId]);
+              
+              db.run(`UPDATE us_stocks SET ${setClause} WHERE asset_id = ?`, values, (err) => {
+                if (err) {
+                  db.run('ROLLBACK');
+                  return reject(err);
+                }
+                completeEdit();
+              });
+            } else {
+              completeEdit();
+            }
+            
+          } else if (editData.class === 'jp_stock') {
+            const updates = {};
+            if (editData.code !== undefined) updates.code = editData.code.trim();
+            if (editData.quantity !== undefined) updates.quantity = editData.quantity;
+            if (editData.avg_price_jpy !== undefined) updates.avg_price_jpy = editData.avg_price_jpy;
+            if (editData.account_id !== undefined) updates.account_id = editData.account_id;
+            
+            if (Object.keys(updates).length > 0) {
+              const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+              const values = Object.values(updates).concat([assetId]);
+              
+              db.run(`UPDATE jp_stocks SET ${setClause} WHERE asset_id = ?`, values, (err) => {
+                if (err) {
+                  db.run('ROLLBACK');
+                  return reject(err);
+                }
+                completeEdit();
+              });
+            } else {
+              completeEdit();
+            }
+          }
+        };
+
+        const completeEdit = () => {
+          // 監査ログ記録
+          logAudit('assets', assetId, 'ASSET_EDIT', currentAsset, { ...currentAsset, ...editData }, userId);
+
+          db.run('COMMIT', (err) => {
+            if (err) return reject(err);
+            resolve({
+              merged: false,
+              asset: {
+                ...currentAsset,
+                ...editData,
+                id: assetId
+              }
+            });
+          });
+        };
+
+        updateClassData();
+      });
+    });
+  });
+}
 
 app.delete('/api/assets/:id', requireAdmin, (req, res) => {
   const assetId = req.params.id;

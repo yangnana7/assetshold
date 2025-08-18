@@ -371,41 +371,51 @@ sudo systemctl restart assetshold
 
 サーバー起動中に `data/portfolio.csv` を編集・保存すると、自動的にデータベースに同期されます。
 
-### バックアップ
+### バックアップ管理
 
-アプリケーション停止時に `backup/` ディレクトリに SQLite ファイルがバックアップされます。
+# バックアップからの復旧（推奨方法）
+  sudo systemctl stop assetshold
+  cp backup/portfolio_20250816_185113.db
+  data/portfolio.db
+  sudo systemctl start assetshold
 
-#### Ubuntu での自動バックアップ
+#### 自動バックアップ
+
+アプリケーション終了時に自動でデータベースバックアップが作成されます。
+バックアップファイルは `backup/` ディレクトリに `portfolio_YYYYMMDD_HHMMSS.db` 形式で保存されます。
+
+#### バックアップ掃除
+
+バックアップファイルの自動掃除スクリプトが用意されています：
 
 ```bash
-# バックアップスクリプト作成
-sudo nano /usr/local/bin/backup-assetshold.sh
+# デフォルト（最新10個を保持）
+node scripts/cleanup-backups.js
+
+# 保持数を指定
+node scripts/cleanup-backups.js ./backup 20
+
+# 環境変数で保持数を指定
+KEEP_BACKUPS=30 node scripts/cleanup-backups.js
+
+# ヘルプ表示
+node scripts/cleanup-backups.js --help
 ```
 
-```bash
-#!/bin/bash
-BACKUP_DIR="$HOME/assetshold/backup"
-DB_FILE="$HOME/assetshold/data/portfolio.db"
-DATE=$(date +%Y%m%d_%H%M%S)
-
-mkdir -p $BACKUP_DIR
-cp $DB_FILE $BACKUP_DIR/portfolio_${DATE}.db
-
-# 30日以上古いバックアップを削除
-find $BACKUP_DIR -name "portfolio_*.db" -mtime +30 -delete
-```
+#### 定期実行の設定
 
 ```bash
-# 実行権限付与
-sudo chmod +x /usr/local/bin/backup-assetshold.sh
-
-# 毎日午前2時にバックアップ実行
+# crontabに追加して毎日午前2時に実行
 crontab -e
 ```
 
 crontabに追加：
 ```
-0 2 * * * /usr/local/bin/backup-assetshold.sh
+# 毎日午前2時にバックアップ掃除（最新10個を保持）
+0 2 * * * cd /path/to/assetshold && node scripts/cleanup-backups.js
+
+# 週1回日曜日の午前3時に実行
+0 3 * * 0 cd /path/to/assetshold && KEEP_BACKUPS=20 node scripts/cleanup-backups.js
 ```
 
 ## トラブルシューティング

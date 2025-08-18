@@ -202,6 +202,22 @@ function roundDown2(x) {
       const unitPriceJpy = roundDown2(Number(priceData.price));
       const valueJpy = round2Floor(unitPriceJpy * quantity);
       
+      // Update jp_stocks table with current market price in JPY
+      try {
+        await new Promise((resolve, reject) => {
+          db.run(
+            'UPDATE jp_stocks SET market_price_jpy = ? WHERE asset_id = ?',
+            [priceData.price, asset.id],
+            function(err) {
+              if (err) reject(err);
+              else resolve();
+            }
+          );
+        });
+      } catch (updateError) {
+        console.error(`Failed to update JPY market price for asset ${asset.id}:`, updateError);
+      }
+      
       return {
         value_jpy: Math.floor(valueJpy),
         unit_price_jpy: unitPriceJpy,
@@ -304,6 +320,13 @@ function initDatabase() {
     db.all('PRAGMA table_info(us_stocks)', (err, rows) => {
       if (!err && rows && !rows.some(r => r.name === 'market_price_usd')) {
         db.run('ALTER TABLE us_stocks ADD COLUMN market_price_usd REAL');
+      }
+    });
+    
+    // Ensure market_price_jpy exists for older DBs
+    db.all('PRAGMA table_info(jp_stocks)', (err, rows) => {
+      if (!err && rows && !rows.some(r => r.name === 'market_price_jpy')) {
+        db.run('ALTER TABLE jp_stocks ADD COLUMN market_price_jpy REAL');
       }
     });
 

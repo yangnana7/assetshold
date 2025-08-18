@@ -1579,28 +1579,46 @@ app.patch('/api/assets/:id', requireAdmin, (req, res) => {
 
             recalcBookValue(db, assetId, recalcOptions)
               .then(newBookValue => {
-                // Update asset book value
-                db.run('UPDATE assets SET book_value_jpy = ?, updated_at = ? WHERE id = ?',
-                  [newBookValue, new Date().toISOString(), assetId], (err) => {
+                // Update asset book value and common fields
+                const commonUpdates = {};
+                const allowedCommonFields = ['name', 'note', 'acquired_at', 'valuation_source', 'liquidity_tier', 'tags'];
+                
+                // Collect common fields from request
+                allowedCommonFields.forEach(field => {
+                  if (req.body.hasOwnProperty(field)) {
+                    commonUpdates[field] = req.body[field];
+                  }
+                });
+                
+                // Always update book_value_jpy and updated_at
+                commonUpdates.book_value_jpy = newBookValue;
+                commonUpdates.updated_at = new Date().toISOString();
+                
+                // Build dynamic UPDATE query
+                const setClause = Object.keys(commonUpdates).map(key => `${key} = ?`).join(', ');
+                const values = Object.values(commonUpdates);
+                values.push(assetId);
+                
+                db.run(`UPDATE assets SET ${setClause} WHERE id = ?`, values, (err) => {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return res.status(500).json({ error: err.message });
+                  }
+
+                  // Commit transaction
+                  db.run('COMMIT', (err) => {
                     if (err) {
-                      db.run('ROLLBACK');
-                      return res.status(500).json({ error: err.message });
+                      return res.status(500).json({ error: 'Failed to commit transaction' });
                     }
 
-                    // Commit transaction
-                    db.run('COMMIT', (err) => {
-                      if (err) {
-                        return res.status(500).json({ error: 'Failed to commit transaction' });
-                      }
-
-                      // Return updated asset
-                      const updatedAsset = { ...asset, book_value_jpy: newBookValue };
-                      res.json({
-                        ok: true,
-                        asset: updatedAsset
-                      });
+                    // Return updated asset with all changes
+                    const updatedAsset = { ...asset, ...commonUpdates };
+                    res.json({
+                      ok: true,
+                      asset: updatedAsset
                     });
                   });
+                });
               })
               .catch(err => {
                 db.run('ROLLBACK');

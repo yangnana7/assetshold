@@ -687,10 +687,12 @@ app.get('/api/dashboard', async (req, res) => {
         SELECT vv.asset_id, vv.value_jpy
         FROM valuations vv
         INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
+          SELECT asset_id, MAX(as_of) AS max_as_of, MAX(id) AS max_id
           FROM valuations
           GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+        ) latest ON latest.asset_id = vv.asset_id 
+                    AND vv.as_of = latest.max_as_of 
+                    AND vv.id = latest.max_id
       ) v ON a.id = v.asset_id
     `,
     assetsByClass: `
@@ -700,10 +702,12 @@ app.get('/api/dashboard', async (req, res) => {
         SELECT vv.asset_id, vv.value_jpy
         FROM valuations vv
         INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
+          SELECT asset_id, MAX(as_of) AS max_as_of, MAX(id) AS max_id
           FROM valuations
           GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+        ) latest ON latest.asset_id = vv.asset_id 
+                    AND vv.as_of = latest.max_as_of 
+                    AND vv.id = latest.max_id
       ) v ON a.id = v.asset_id
       GROUP BY a.class
     `,
@@ -714,10 +718,12 @@ app.get('/api/dashboard', async (req, res) => {
         SELECT vv.asset_id, vv.value_jpy
         FROM valuations vv
         INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
+          SELECT asset_id, MAX(as_of) AS max_as_of, MAX(id) AS max_id
           FROM valuations
           GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+        ) latest ON latest.asset_id = vv.asset_id 
+                    AND vv.as_of = latest.max_as_of 
+                    AND vv.id = latest.max_id
       ) v ON a.id = v.asset_id
       ORDER BY COALESCE(v.value_jpy, a.book_value_jpy) DESC 
       LIMIT 3
@@ -747,10 +753,12 @@ app.get('/api/dashboard', async (req, res) => {
         SELECT vv.asset_id, vv.value_jpy
         FROM valuations vv
         INNER JOIN (
-          SELECT asset_id, MAX(as_of) AS max_as_of
+          SELECT asset_id, MAX(as_of) AS max_as_of, MAX(id) AS max_id
           FROM valuations
           GROUP BY asset_id
-        ) last ON last.asset_id = vv.asset_id AND vv.as_of = last.max_as_of
+        ) latest ON latest.asset_id = vv.asset_id 
+                    AND vv.as_of = latest.max_as_of 
+                    AND vv.id = latest.max_id
       ) v ON a.id = v.asset_id
       WHERE a.created_at IS NOT NULL 
       GROUP BY strftime('%Y-%m', a.created_at)
@@ -798,11 +806,7 @@ app.get('/api/dashboard/class-summary', async (req, res) => {
           END) AS book_total_jpy,
       SUM(
         COALESCE(
-          (SELECT v.value_jpy
-           FROM valuations v
-           WHERE v.asset_id = a.id
-           ORDER BY v.as_of DESC, v.id DESC
-           LIMIT 1),
+          v.value_jpy,
           CASE 
             WHEN a.class='us_stock' THEN COALESCE(us.avg_price_usd,0)*COALESCE(us.quantity,0)*?
             WHEN a.class='jp_stock' THEN COALESCE(jp.avg_price_jpy,0)*COALESCE(jp.quantity,0)
@@ -816,6 +820,17 @@ app.get('/api/dashboard/class-summary', async (req, res) => {
     LEFT JOIN us_stocks us ON us.asset_id = a.id
     LEFT JOIN jp_stocks jp ON jp.asset_id = a.id
     LEFT JOIN precious_metals pm ON pm.asset_id = a.id
+    LEFT JOIN (
+      SELECT vv.asset_id, vv.value_jpy
+      FROM valuations vv
+      INNER JOIN (
+        SELECT asset_id, MAX(as_of) AS max_as_of, MAX(id) AS max_id
+        FROM valuations
+        GROUP BY asset_id
+      ) latest ON latest.asset_id = vv.asset_id 
+                  AND vv.as_of = latest.max_as_of 
+                  AND vv.id = latest.max_id
+    ) v ON a.id = v.asset_id
     GROUP BY a.class
     ORDER BY book_total_jpy DESC
   `;

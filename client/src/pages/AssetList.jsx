@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 import { formatCurrency, formatUsd, formatDate, formatAssetName } from '../utils/format'
 import AssetEditModalBDD from '../components/AssetEditModalBDD'
+import AssetEditModal from '../components/AssetEditModal'
 import AssetCreateModal from '../components/AssetCreateModal'
 
 function AssetList() {
@@ -74,6 +75,7 @@ function AssetList() {
   }
 
   const isEditableAsset = (asset) => ['us_stock', 'jp_stock', 'precious_metal', 'watch', 'real_estate', 'collection', 'cash'].includes(asset.class)
+  const isNewEditableAsset = (asset) => ['us_stock', 'jp_stock'].includes(asset.class)
 
   const filteredAssets = assets.filter(asset => 
     asset.name.toLowerCase().includes(filter.toLowerCase()) ||
@@ -169,16 +171,31 @@ function AssetList() {
       )}
 
       {editingAsset && (
-        <AssetEditModalBDD
-          asset={editingAsset}
-          isOpen={isEditOpen}
-          onClose={() => { setIsEditOpen(false); setEditingAsset(null); }}
-          onSave={async (updated) => {
-            // Refresh list then close
-            await fetchAssets()
-            handleAssetUpdated(updated)
-          }}
-        />
+        <>
+          {isNewEditableAsset(editingAsset) ? (
+            <AssetEditModal
+              asset={editingAsset}
+              isOpen={isEditOpen}
+              onClose={() => { setIsEditOpen(false); setEditingAsset(null); }}
+              onAssetUpdated={async (result) => {
+                // Refresh list then close
+                await fetchAssets()
+                handleAssetUpdated(result.asset || result)
+              }}
+            />
+          ) : (
+            <AssetEditModalBDD
+              asset={editingAsset}
+              isOpen={isEditOpen}
+              onClose={() => { setIsEditOpen(false); setEditingAsset(null); }}
+              onSave={async (updated) => {
+                // Refresh list then close
+                await fetchAssets()
+                handleAssetUpdated(updated)
+              }}
+            />
+          )}
+        </>
       )}
 
       {showCreateModal && (

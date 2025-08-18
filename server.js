@@ -107,6 +107,9 @@ const { makeStockProvider, makeFxProvider, makePreciousMetalProvider } = require
 // Duplicate detection service
 const DuplicateDetectionService = require('./server/duplicates/service');
 
+// Merge utilities
+const { mergeUsPosition, mergeJpPosition, findMergeTarget } = require('./server/utils/merge');
+
 // Initialize providers
 const stockProvider = makeStockProvider(MARKET_ENABLE);
 const fxProvider = makeFxProvider(MARKET_ENABLE);
@@ -957,6 +960,127 @@ app.delete('/api/users/:id', requireAdmin, (req, res) => {
   });
 });
 
+// Accounts API endpoints
+app.get('/api/accounts', requireAdmin, (req, res) => {
+  db.all('SELECT * FROM accounts ORDER BY created_at DESC', (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+app.post('/api/accounts', requireAdmin, (req, res) => {
+  const { broker, account_type, name } = req.body;
+  
+  if (!broker || !account_type) {
+    return res.status(400).json({ error: 'Broker and account type are required' });
+  }
+  
+  if (!['tokutei', 'ippan', 'nisa'].includes(account_type)) {
+    return res.status(400).json({ error: 'Invalid account type' });
+  }
+  
+  const accountName = name || `${broker}/${account_type}`;
+  
+  db.run(
+    'INSERT INTO accounts (broker, account_type, name) VALUES (?, ?, ?)',
+    [broker, account_type, accountName],
+    function(err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      const newAccount = {
+        id: this.lastID,
+        broker,
+        account_type,
+        name: accountName
+      };
+      
+      logAudit('accounts', this.lastID, 'CREATE', null, newAccount, req.session.user.id);
+      res.status(201).json(newAccount);
+    }
+  );
+});
+
+app.put('/api/accounts/:id', requireAdmin, (req, res) => {
+  const accountId = parseInt(req.params.id);
+  const { broker, account_type, name } = req.body;
+  
+  if (!broker || !account_type) {
+    return res.status(400).json({ error: 'Broker and account type are required' });
+  }
+  
+  if (!['tokutei', 'ippan', 'nisa'].includes(account_type)) {
+    return res.status(400).json({ error: 'Invalid account type' });
+  }
+  
+  // Get current account for audit
+  db.get('SELECT * FROM accounts WHERE id = ?', [accountId], (err, currentAccount) => {
+    if (err || !currentAccount) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    
+    const accountName = name || `${broker}/${account_type}`;
+    
+    db.run(
+      'UPDATE accounts SET broker = ?, account_type = ?, name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [broker, account_type, accountName, accountId],
+      function(err) {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+        
+        const updatedAccount = {
+          id: accountId,
+          broker,
+          account_type,
+          name: accountName
+        };
+        
+        logAudit('accounts', accountId, 'UPDATE', currentAccount, updatedAccount, req.session.user.id);
+        res.json(updatedAccount);
+      }
+    );
+  });
+});
+
+app.delete('/api/accounts/:id', requireAdmin, (req, res) => {
+  const accountId = parseInt(req.params.id);
+  
+  // Check if account has associated assets
+  db.get(
+    'SELECT COUNT(*) as count FROM us_stocks WHERE account_id = ? UNION ALL SELECT COUNT(*) as count FROM jp_stocks WHERE account_id = ?',
+    [accountId, accountId],
+    (err, result) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      if (result && result.count > 0) {
+        return res.status(400).json({ error: 'Cannot delete account with associated assets' });
+      }
+      
+      // Get current account for audit
+      db.get('SELECT * FROM accounts WHERE id = ?', [accountId], (err, currentAccount) => {
+        if (err || !currentAccount) {
+          return res.status(404).json({ error: 'Account not found' });
+        }
+        
+        db.run('DELETE FROM accounts WHERE id = ?', [accountId], function(err) {
+          if (err) {
+            return res.status(500).json({ error: err.message });
+          }
+          
+          logAudit('accounts', accountId, 'DELETE', currentAccount, null, req.session.user.id);
+          res.json({ success: true });
+        });
+      });
+    }
+  );
+});
+
 // Assets CRUD routes with current valuation
 app.get('/api/assets', async (req, res) => {
   // helper: tolerant JSON parse
@@ -1415,7 +1539,8 @@ app.get('/api/assets/:id', async (req, res) => {
   });
 });
 
-app.post('/api/assets', requireAdmin, (req, res) => {
+// POST /admin/assets with auto-merge functionality
+app.post('/api/assets', requireAdmin, async (req, res) => {
   const {
     class: assetClass,
     name,
@@ -1425,6 +1550,9 @@ app.post('/api/assets', requireAdmin, (req, res) => {
     valuation_source = 'manual',
     liquidity_tier,
     tags,
+    // Account fields
+    account_id,
+    account, // For new account creation
     // Stock-specific fields
     ticker,
     exchange,
@@ -1432,93 +1560,347 @@ app.post('/api/assets', requireAdmin, (req, res) => {
     quantity,
     avg_price_usd,
     avg_price_jpy,
+    fx_at_acq, // USD/JPY exchange rate at acquisition
     // Precious metal-specific fields
     metal,
     weight_g,
     purity,
-    unit_price_jpy
+    unit_price_jpy,
+    // Options
+    merge_policy = 'auto_weighted_avg',
+    dry_run = false
   } = req.body;
   
-  // Validation
-  if (!assetClass || !name || !book_value_jpy || !liquidity_tier) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-  
-  // Class-specific validation
-  if (assetClass === 'us_stock' && (!ticker || !quantity || !avg_price_usd)) {
-    return res.status(400).json({ error: 'Missing required US stock fields' });
-  }
-  if (assetClass === 'jp_stock' && (!code || !quantity || !avg_price_jpy)) {
-    return res.status(400).json({ error: 'Missing required JP stock fields' });
-  }
-  if (assetClass === 'precious_metal' && (!metal || !weight_g || !unit_price_jpy)) {
-    return res.status(400).json({ error: 'Missing required precious metal fields' });
-  }
-  
-  db.serialize(() => {
-    db.run('BEGIN TRANSACTION');
+  try {
+    // Basic validation
+    if (!assetClass || !name || !liquidity_tier) {
+      return res.status(400).json({ error: 'class_required' });
+    }
     
-    try {
-      const stmt = db.prepare(`INSERT INTO assets 
-        (class, name, note, acquired_at, book_value_jpy, valuation_source, liquidity_tier, tags) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+    // Account validation
+    if (!account_id && !account) {
+      return res.status(400).json({ error: 'account_required' });
+    }
+    
+    // Class-specific validation
+    if (assetClass === 'us_stock') {
+      if (!ticker || !quantity || !avg_price_usd) {
+        return res.status(400).json({ error: 'ticker_required' });
+      }
+      if (!(parseFloat(quantity) > 0) || !(parseFloat(avg_price_usd) > 0)) {
+        return res.status(400).json({ error: 'quantity_invalid' });
+      }
+      if (fx_at_acq && !(parseFloat(fx_at_acq) > 0)) {
+        return res.status(400).json({ error: 'fx_rate_invalid' });
+      }
+    } else if (assetClass === 'jp_stock') {
+      if (!code || !quantity || !avg_price_jpy) {
+        return res.status(400).json({ error: 'code_required' });
+      }
+      if (!(parseFloat(quantity) > 0) || !(parseFloat(avg_price_jpy) > 0)) {
+        return res.status(400).json({ error: 'quantity_invalid' });
+      }
+    } else if (assetClass === 'precious_metal') {
+      if (!metal || !weight_g || !unit_price_jpy) {
+        return res.status(400).json({ error: 'Missing required precious metal fields' });
+      }
+    }
+    
+    // Handle account creation or lookup
+    let finalAccountId = account_id;
+    if (!finalAccountId && account) {
+      const { broker, account_type, name: accountName } = account;
+      if (!broker || !account_type) {
+        return res.status(400).json({ error: 'account_required' });
+      }
       
-      stmt.run(
-        assetClass, name, note, acquired_at, book_value_jpy, 
-        valuation_source, liquidity_tier, tags,
-        function(err) {
-          if (err) {
-            db.run('ROLLBACK');
-            return res.status(500).json({ error: err.message });
+      // Create new account
+      const accountResult = await new Promise((resolve, reject) => {
+        db.run(
+          'INSERT INTO accounts (broker, account_type, name) VALUES (?, ?, ?)',
+          [broker, account_type, accountName || `${broker}/${account_type}`],
+          function(err) {
+            if (err) return reject(err);
+            resolve({ id: this.lastID });
           }
+        );
+      });
+      finalAccountId = accountResult.id;
+    }
+    
+    // Check for merge target (for us_stock and jp_stock only)
+    let existingAsset = null;
+    if (assetClass === 'us_stock' || assetClass === 'jp_stock') {
+      const identifier = assetClass === 'us_stock' ? ticker : code;
+      existingAsset = await findMergeTarget(db, assetClass, identifier, finalAccountId);
+    }
+    
+    if (existingAsset) {
+      // Merge logic
+      let mergeResult;
+      
+      if (assetClass === 'us_stock') {
+        mergeResult = mergeUsPosition({
+          oldQty: existingAsset.quantity,
+          oldAvgUsd: existingAsset.avg_price_usd,
+          oldBookJpy: existingAsset.book_value_jpy,
+          addQty: parseFloat(quantity),
+          addAvgUsd: parseFloat(avg_price_usd),
+          fxAtAcq: fx_at_acq ? parseFloat(fx_at_acq) : null
+        });
+      } else if (assetClass === 'jp_stock') {
+        mergeResult = mergeJpPosition({
+          oldQty: existingAsset.quantity,
+          oldAvgJpy: existingAsset.avg_price_jpy,
+          oldBookJpy: existingAsset.book_value_jpy,
+          addQty: parseFloat(quantity),
+          addAvgJpy: parseFloat(avg_price_jpy)
+        });
+      }
+      
+      if (dry_run) {
+        // Return preview without saving
+        return res.json({
+          merged: true,
+          kept_asset_id: existingAsset.id,
+          before: {
+            qty: existingAsset.quantity,
+            [assetClass === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+              assetClass === 'us_stock' ? existingAsset.avg_price_usd : existingAsset.avg_price_jpy,
+            book_jpy: existingAsset.book_value_jpy
+          },
+          after: {
+            qty: mergeResult.newQty,
+            [assetClass === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+              assetClass === 'us_stock' ? mergeResult.newAvgUsd : mergeResult.newAvgJpy,
+            book_jpy: mergeResult.newBookJpy
+          },
+          method: mergeResult.method
+        });
+      }
+      
+      // Apply merge
+      return new Promise((resolve, reject) => {
+        db.serialize(() => {
+          db.run('BEGIN TRANSACTION');
           
-          const assetId = this.lastID;
-          
-          // Insert class-specific data
-          if (assetClass === 'us_stock') {
-            const stockStmt = db.prepare(`INSERT INTO us_stocks 
-              (asset_id, ticker, exchange, quantity, avg_price_usd) 
-              VALUES (?, ?, ?, ?, ?)`);
-            stockStmt.run(assetId, ticker, exchange, parseFloat(quantity), parseFloat(avg_price_usd));
-            stockStmt.finalize();
-          } else if (assetClass === 'jp_stock') {
-            const stockStmt = db.prepare(`INSERT INTO jp_stocks 
-              (asset_id, code, quantity, avg_price_jpy) 
-              VALUES (?, ?, ?, ?)`);
-            stockStmt.run(assetId, code, parseFloat(quantity), parseFloat(avg_price_jpy));
-            stockStmt.finalize();
-          } else if (assetClass === 'precious_metal') {
-            const metalStmt = db.prepare(`INSERT INTO precious_metals 
-              (asset_id, metal, weight_g, purity, unit_price_jpy) 
-              VALUES (?, ?, ?, ?, ?)`);
-            metalStmt.run(assetId, metal, parseFloat(weight_g), purity ? parseFloat(purity) : null, parseFloat(unit_price_jpy));
-            metalStmt.finalize();
-          }
-          
-          db.run('COMMIT');
-          
-          const newAsset = {
-            id: assetId,
+          // Update assets table
+          db.run(
+            'UPDATE assets SET book_value_jpy = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [mergeResult.newBookJpy, existingAsset.id],
+            (err) => {
+              if (err) {
+                db.run('ROLLBACK');
+                return reject(err);
+              }
+              
+              // Update class-specific table
+              if (assetClass === 'us_stock') {
+                db.run(
+                  'UPDATE us_stocks SET quantity = ?, avg_price_usd = ? WHERE asset_id = ?',
+                  [mergeResult.newQty, mergeResult.newAvgUsd, existingAsset.id],
+                  (err) => {
+                    if (err) {
+                      db.run('ROLLBACK');
+                      return reject(err);
+                    }
+                    commitMerge();
+                  }
+                );
+              } else if (assetClass === 'jp_stock') {
+                db.run(
+                  'UPDATE jp_stocks SET quantity = ?, avg_price_jpy = ? WHERE asset_id = ?',
+                  [mergeResult.newQty, mergeResult.newAvgJpy, existingAsset.id],
+                  (err) => {
+                    if (err) {
+                      db.run('ROLLBACK');
+                      return reject(err);
+                    }
+                    commitMerge();
+                  }
+                );
+              }
+              
+              function commitMerge() {
+                // Log audit trail
+                const auditData = {
+                  table_name: 'assets',
+                  record_id: existingAsset.id,
+                  action: 'AUTO_MERGE_STOCK',
+                  old_values: {
+                    qty: existingAsset.quantity,
+                    [assetClass === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+                      assetClass === 'us_stock' ? existingAsset.avg_price_usd : existingAsset.avg_price_jpy,
+                    book_jpy: existingAsset.book_value_jpy
+                  },
+                  new_values: {
+                    qty: mergeResult.newQty,
+                    [assetClass === 'us_stock' ? 'avg_usd' : 'avg_jpy']: 
+                      assetClass === 'us_stock' ? mergeResult.newAvgUsd : mergeResult.newAvgJpy,
+                    book_jpy: mergeResult.newBookJpy,
+                    account_id: finalAccountId,
+                    [assetClass === 'us_stock' ? 'ticker' : 'code']: 
+                      assetClass === 'us_stock' ? ticker : code
+                  },
+                  user_id: req.session.user.id || 'admin',
+                  source: 'api'
+                };
+                
+                db.run(
+                  'INSERT INTO audit_log (table_name, record_id, action, old_values, new_values, user_id, source) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                  [auditData.table_name, auditData.record_id, auditData.action, JSON.stringify(auditData.old_values), JSON.stringify(auditData.new_values), auditData.user_id, auditData.source],
+                  function(err) {
+                    if (err) {
+                      db.run('ROLLBACK');
+                      return reject(err);
+                    }
+                    
+                    db.run('COMMIT');
+                    
+                    resolve({
+                      merged: true,
+                      kept_asset_id: existingAsset.id,
+                      before: auditData.old_values,
+                      after: auditData.new_values,
+                      method: mergeResult.method,
+                      audit_id: this.lastID
+                    });
+                  }
+                );
+              }
+            }
+          );
+        });
+      }).then(result => {
+        res.json(result);
+      }).catch(error => {
+        res.status(500).json({ error: error.message || 'merge_failed' });
+      });
+      
+    } else {
+      // No merge target found, create new asset
+      if (dry_run) {
+        return res.json({
+          merged: false,
+          preview: {
             class: assetClass,
             name,
-            note,
-            acquired_at,
-            book_value_jpy,
-            valuation_source,
-            liquidity_tier,
-            tags
-          };
+            account_id: finalAccountId,
+            [assetClass === 'us_stock' ? 'ticker' : assetClass === 'jp_stock' ? 'code' : 'type']: 
+              assetClass === 'us_stock' ? ticker : assetClass === 'jp_stock' ? code : metal,
+            quantity: parseFloat(quantity) || parseFloat(weight_g),
+            avg_price: parseFloat(avg_price_usd) || parseFloat(avg_price_jpy) || parseFloat(unit_price_jpy)
+          }
+        });
+      }
+      
+      // Create new asset (original logic with account_id support)
+      return new Promise((resolve, reject) => {
+        db.serialize(() => {
+          db.run('BEGIN TRANSACTION');
           
-          logAudit('assets', assetId, 'CREATE', null, newAsset, req.session.user.id);
-          res.status(201).json(newAsset);
-        }
-      );
-      stmt.finalize();
-    } catch (error) {
-      db.run('ROLLBACK');
-      return res.status(500).json({ error: error.message });
+          const stmt = db.prepare(`INSERT INTO assets 
+            (class, name, note, acquired_at, book_value_jpy, valuation_source, liquidity_tier, tags) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+          
+          // Calculate book_value_jpy if not provided
+          let calculatedBookValue = book_value_jpy;
+          if (!calculatedBookValue) {
+            if (assetClass === 'us_stock' && fx_at_acq) {
+              calculatedBookValue = Math.floor(parseFloat(quantity) * parseFloat(avg_price_usd) * parseFloat(fx_at_acq));
+            } else if (assetClass === 'jp_stock') {
+              calculatedBookValue = Math.floor(parseFloat(quantity) * parseFloat(avg_price_jpy));
+            } else if (assetClass === 'precious_metal') {
+              calculatedBookValue = Math.floor(parseFloat(weight_g) * parseFloat(unit_price_jpy));
+            }
+          }
+          
+          stmt.run(
+            assetClass, name, note, acquired_at, calculatedBookValue, 
+            valuation_source, liquidity_tier, tags,
+            function(err) {
+              if (err) {
+                db.run('ROLLBACK');
+                return reject(err);
+              }
+              
+              const assetId = this.lastID;
+              
+              // Insert class-specific data with account_id
+              if (assetClass === 'us_stock') {
+                const stockStmt = db.prepare(`INSERT INTO us_stocks 
+                  (asset_id, ticker, exchange, quantity, avg_price_usd, account_id) 
+                  VALUES (?, ?, ?, ?, ?, ?)`);
+                stockStmt.run(assetId, ticker, exchange, parseFloat(quantity), parseFloat(avg_price_usd), finalAccountId, (err) => {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                  }
+                  stockStmt.finalize();
+                  finishCreation();
+                });
+              } else if (assetClass === 'jp_stock') {
+                const stockStmt = db.prepare(`INSERT INTO jp_stocks 
+                  (asset_id, code, quantity, avg_price_jpy, account_id) 
+                  VALUES (?, ?, ?, ?, ?)`);
+                stockStmt.run(assetId, code, parseFloat(quantity), parseFloat(avg_price_jpy), finalAccountId, (err) => {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                  }
+                  stockStmt.finalize();
+                  finishCreation();
+                });
+              } else if (assetClass === 'precious_metal') {
+                const metalStmt = db.prepare(`INSERT INTO precious_metals 
+                  (asset_id, metal, weight_g, purity, unit_price_jpy) 
+                  VALUES (?, ?, ?, ?, ?)`);
+                metalStmt.run(assetId, metal, parseFloat(weight_g), purity ? parseFloat(purity) : null, parseFloat(unit_price_jpy), (err) => {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                  }
+                  metalStmt.finalize();
+                  finishCreation();
+                });
+              } else {
+                finishCreation();
+              }
+              
+              function finishCreation() {
+                db.run('COMMIT');
+                
+                const newAsset = {
+                  id: assetId,
+                  class: assetClass,
+                  name,
+                  note,
+                  acquired_at,
+                  book_value_jpy: calculatedBookValue,
+                  valuation_source,
+                  liquidity_tier,
+                  tags,
+                  account_id: finalAccountId
+                };
+                
+                logAudit('assets', assetId, 'CREATE', null, newAsset, req.session.user.id);
+                resolve({ merged: false, created_asset_id: assetId, asset: newAsset });
+              }
+            }
+          );
+          stmt.finalize();
+        });
+      }).then(result => {
+        res.status(201).json(result);
+      }).catch(error => {
+        res.status(500).json({ error: error.message || 'creation_failed' });
+      });
     }
-  });
+    
+  } catch (error) {
+    console.error('Asset creation/merge error:', error);
+    res.status(500).json({ error: error.message || 'internal_error' });
+  }
 });
 
 app.patch('/api/assets/:id', requireAdmin, (req, res) => {

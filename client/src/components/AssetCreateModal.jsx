@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button-simple'
 import { Badge } from '@/components/ui/badge-simple'
 import { Input } from '@/components/ui/input-simple'
-import { Plus, Save, X } from 'lucide-react'
+import { Plus, Save, X, Eye, AlertTriangle, Info } from 'lucide-react'
 
 export default function AssetCreateModal({ onClose, onAssetCreated }) {
   const [common, setCommon] = useState({
@@ -18,11 +18,36 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
     tags: ''
   })
   const [classFields, setClassFields] = useState({})
+  const [accountFields, setAccountFields] = useState({
+    account_id: '',
+    fx_at_acq: '' // USD/JPY exchange rate at acquisition for US stocks
+  })
+  const [accounts, setAccounts] = useState([])
+  const [showAccountModal, setShowAccountModal] = useState(false)
+  const [newAccount, setNewAccount] = useState({ broker: '', account_type: 'tokutei', name: '' })
+  const [mergePreview, setMergePreview] = useState(null)
+  const [showMergePreview, setShowMergePreview] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const isStock = useMemo(() => ['us_stock', 'jp_stock'].includes(common.class), [common.class])
   const isMetal = useMemo(() => common.class === 'precious_metal', [common.class])
+
+  // Load accounts on mount
+  useEffect(() => {
+    const fetchAccounts = async () => {
+      try {
+        const res = await axios.get('/api/accounts', { withCredentials: true })
+        setAccounts(res.data)
+        if (res.data.length > 0) {
+          setAccountFields(prev => ({ ...prev, account_id: res.data[0].id }))
+        }
+      } catch (err) {
+        console.error('Failed to fetch accounts:', err)
+      }
+    }
+    fetchAccounts()
+  }, [])
 
   useEffect(() => {
     // Reset class fields when class changes
@@ -71,18 +96,106 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
 
   const updateCommon = (field, value) => setCommon(prev => ({ ...prev, [field]: value }))
   const updateClassField = (field, value) => setClassFields(prev => ({ ...prev, [field]: value }))
+  const updateAccountField = (field, value) => setAccountFields(prev => ({ ...prev, [field]: value }))
+
+  // Handle account creation
+  const handleCreateAccount = async () => {
+    if (!newAccount.broker || !newAccount.account_type) {
+      setError('証券会社と口座種別は必須です')
+      return
+    }
+    
+    try {
+      const res = await axios.post('/api/accounts', newAccount, { withCredentials: true })
+      setAccounts(prev => [res.data, ...prev])
+      setAccountFields(prev => ({ ...prev, account_id: res.data.id }))
+      setShowAccountModal(false)
+      setNewAccount({ broker: '', account_type: 'tokutei', name: '' })
+    } catch (err) {
+      setError(err.response?.data?.error || '口座作成に失敗しました')
+    }
+  }
+
+  // Show merge preview
+  const handleShowPreview = async () => {
+    if (!isFormValid()) {
+      setError('必須項目を入力してください')
+      return
+    }
+    
+    try {
+      setLoading(true)
+      setError('')
+      const payload = buildPayload(true) // dry_run = true
+      const res = await axios.post('/api/assets', payload, { withCredentials: true })
+      setMergePreview(res.data)
+      setShowMergePreview(true)
+    } catch (err) {
+      setError(err.response?.data?.error || 'プレビューの取得に失敗しました')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Check if form is valid
+  const isFormValid = () => {
+    if (!common.class || !common.name || !common.liquidity_tier || !accountFields.account_id) {
+      return false
+    }
+    
+    if (common.class === 'us_stock') {
+      return classFields.ticker && classFields.quantity > 0 && classFields.avg_price_usd > 0
+    } else if (common.class === 'jp_stock') {
+      return classFields.code && classFields.quantity > 0 && classFields.avg_price_jpy > 0
+    } else if (common.class === 'precious_metal') {
+      return classFields.metal && classFields.weight_g > 0 && classFields.unit_price_jpy > 0
+    }
+    
+    return true
+  }
+
+  // Build API payload
+  const buildPayload = (dryRun = false) => {
+    const payload = { 
+      ...common, 
+      ...classFields, 
+      account_id: accountFields.account_id,
+      dry_run: dryRun
+    }
+    
+    if (common.class === 'us_stock' && accountFields.fx_at_acq) {
+      payload.fx_at_acq = Number(accountFields.fx_at_acq)
+    }
+    
+    if (!payload.note) payload.note = ''
+    return payload
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
     setError('')
     try {
-      const payload = { ...common, ...classFields }
-      if (!payload.note) payload.note = ''
+      const payload = buildPayload(false) // dry_run = false
       const res = await axios.post('/api/assets', payload, { withCredentials: true })
       onAssetCreated(res.data)
     } catch (err) {
       setError(err.response?.data?.error || '登録に失敗しました')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handle merge confirmation
+  const handleMergeConfirm = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const payload = buildPayload(false) // Execute the merge
+      const res = await axios.post('/api/assets', payload, { withCredentials: true })
+      onAssetCreated(res.data)
+    } catch (err) {
+      setError(err.response?.data?.error || '統合に失敗しました')
     } finally {
       setLoading(false)
     }
@@ -142,6 +255,52 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
                     required
                   />
                 </div>
+
+                <div>
+                  <label className="text-sm font-medium mb-1 block">口座</label>
+                  <div className="flex gap-2">
+                    <select
+                      className="flex-1 px-3 py-2 border rounded-md"
+                      value={accountFields.account_id}
+                      onChange={(e) => updateAccountField('account_id', e.target.value)}
+                      required
+                      disabled={loading}
+                    >
+                      <option value="">口座を選択してください</option>
+                      {accounts.map(account => (
+                        <option key={account.id} value={account.id}>
+                          {account.name} ({account.broker}/{account.account_type})
+                        </option>
+                      ))}
+                    </select>
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => setShowAccountModal(true)}
+                      disabled={loading}
+                    >
+                      <Plus className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {common.class === 'us_stock' && (
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">取得時為替 USD/JPY (任意)</label>
+                    <Input
+                      type="number"
+                      value={accountFields.fx_at_acq}
+                      onChange={(e) => updateAccountField('fx_at_acq', e.target.value)}
+                      placeholder="例: 155.00"
+                      step="0.01"
+                      disabled={loading}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      入力があればunit法、無ければscale法で簿価を計算します
+                    </p>
+                  </div>
+                )}
 
                 <div>
                   <label className="text-sm font-medium mb-1 block">取得日</label>
@@ -339,13 +498,196 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={onClose} disabled={loading}>キャンセル</Button>
-            <Button type="submit" disabled={loading}>
-              <Save className="w-4 h-4 mr-1" />{loading ? '登録中...' : '登録'}
+            <Button type="button" variant="secondary" onClick={onClose} disabled={loading}>
+              キャンセル
+            </Button>
+            {isStock && (
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={handleShowPreview} 
+                disabled={loading || !isFormValid()}
+              >
+                <Eye className="w-4 h-4 mr-1" />
+                プレビュー
+              </Button>
+            )}
+            <Button type="submit" disabled={loading || !isFormValid()}>
+              <Save className="w-4 h-4 mr-1" />
+              {loading ? '処理中...' : '登録'}
             </Button>
           </div>
         </form>
       </div>
+
+      {/* Account Creation Modal */}
+      {showAccountModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-60">
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-md m-4">
+            <div className="p-4 border-b">
+              <h3 className="text-lg font-semibold">新規口座作成</h3>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">証券会社</label>
+                <Input
+                  value={newAccount.broker}
+                  onChange={(e) => setNewAccount(prev => ({ ...prev, broker: e.target.value }))}
+                  placeholder="例: SBI証券"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">口座種別</label>
+                <select
+                  className="w-full px-3 py-2 border rounded-md"
+                  value={newAccount.account_type}
+                  onChange={(e) => setNewAccount(prev => ({ ...prev, account_type: e.target.value }))}
+                  required
+                >
+                  <option value="tokutei">特定</option>
+                  <option value="ippan">一般</option>
+                  <option value="nisa">NISA</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">表示名 (任意)</label>
+                <Input
+                  value={newAccount.name}
+                  onChange={(e) => setNewAccount(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="例: My NISA"
+                />
+              </div>
+            </div>
+            <div className="p-4 border-t flex justify-end gap-2">
+              <Button 
+                type="button" 
+                variant="secondary" 
+                onClick={() => setShowAccountModal(false)}
+              >
+                キャンセル
+              </Button>
+              <Button onClick={handleCreateAccount}>
+                作成
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Merge Preview Modal */}
+      {showMergePreview && mergePreview && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-60">
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-lg m-4">
+            <div className="p-4 border-b">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                {mergePreview.merged ? (
+                  <>
+                    <AlertTriangle className="w-5 h-5 text-orange-500" />
+                    統合プレビュー
+                  </>
+                ) : (
+                  <>
+                    <Info className="w-5 h-5 text-blue-500" />
+                    新規作成確認
+                  </>
+                )}
+              </h3>
+            </div>
+            <div className="p-4 space-y-4">
+              {mergePreview.merged ? (
+                <>
+                  <div className="bg-orange-50 border border-orange-200 rounded p-3">
+                    <p className="text-sm text-orange-800">
+                      同一銘柄・同一口座の既存ポジションが見つかりました。統合を実行します。
+                    </p>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">対象</p>
+                      <p className="text-sm">
+                        {common.class === 'us_stock' ? classFields.ticker : classFields.code} / 
+                        口座ID: {accountFields.account_id}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">統合方式</p>
+                      <Badge variant="outline">
+                        {mergePreview.method === 'unit' ? 'unit（取得時為替使用）' : 'scale（比例スケール）'}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="font-medium">変更前</p>
+                        <div className="space-y-1">
+                          <p>数量: {mergePreview.before.qty}</p>
+                          <p>平均単価: {common.class === 'us_stock' ? 
+                            `USD ${mergePreview.before.avg_usd?.toFixed(2)}` : 
+                            `JPY ${mergePreview.before.avg_jpy?.toLocaleString()}`
+                          }</p>
+                          <p>簿価: ¥{mergePreview.before.book_jpy?.toLocaleString()}</p>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="font-medium">変更後</p>
+                        <div className="space-y-1">
+                          <p>数量: {mergePreview.after.qty}</p>
+                          <p>平均単価: {common.class === 'us_stock' ? 
+                            `USD ${mergePreview.after.avg_usd?.toFixed(2)}` : 
+                            `JPY ${mergePreview.after.avg_jpy?.toLocaleString()}`
+                          }</p>
+                          <p>簿価: ¥{mergePreview.after.book_jpy?.toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                    <p className="text-sm text-blue-800">
+                      新規ポジションとして作成されます。
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm">
+                      <span className="font-medium">クラス:</span> {mergePreview.preview?.class}
+                    </p>
+                    <p className="text-sm">
+                      <span className="font-medium">口座:</span> {mergePreview.preview?.account_id}
+                    </p>
+                    {mergePreview.preview?.ticker && (
+                      <p className="text-sm">
+                        <span className="font-medium">ティッカー:</span> {mergePreview.preview.ticker}
+                      </p>
+                    )}
+                    {mergePreview.preview?.code && (
+                      <p className="text-sm">
+                        <span className="font-medium">銘柄コード:</span> {mergePreview.preview.code}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="p-4 border-t flex justify-end gap-2">
+              <Button 
+                type="button" 
+                variant="secondary" 
+                onClick={() => setShowMergePreview(false)}
+              >
+                キャンセル
+              </Button>
+              <Button 
+                onClick={mergePreview.merged ? handleMergeConfirm : handleSubmit}
+                disabled={loading}
+              >
+                {mergePreview.merged ? '統合を実行' : '新規作成'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

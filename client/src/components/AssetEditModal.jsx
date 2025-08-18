@@ -233,65 +233,73 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
     return (
       <div className="modal-overlay" style={{zIndex: 1001}}>
         <div className="modal-content">
-          <h3>
+          <h2>
             {previewData.merged ? '統合プレビュー' : '編集プレビュー'}
-          </h3>
+          </h2>
           
-          {previewData.merged ? (
-            <div>
-              <p>対象: {asset.class} / {asset?.class === 'us_stock' ? formData.ticker : formData.code} / 口座ID:{formData.account_id}</p>
-              <p>統合方式: {previewData.method}（{previewData.method === 'unit' ? '取得時為替を使用' : '比例スケール'}）</p>
-              
-              <div className="merge-preview">
-                <div>数量: {previewData.before.qty} → {previewData.after.qty}</div>
-                <div>
-                  平均単価: {asset.class === 'us_stock' ? 'USD' : 'JPY'} {
-                    asset.class === 'us_stock' ? previewData.before.avg_usd : previewData.before.avg_jpy
-                  } → {
-                    asset.class === 'us_stock' ? previewData.after.avg_usd : previewData.after.avg_jpy
-                  }
+          <div className="modal-form">
+            {previewData.merged ? (
+              <>
+                <div className="section-title">統合対象</div>
+                <p>対象: {asset.class} / {asset?.class === 'us_stock' ? formData.ticker : formData.code} / 口座ID:{formData.account_id}</p>
+                <p>統合方式: {previewData.method}（{previewData.method === 'unit' ? '取得時為替を使用' : '比例スケール'}）</p>
+                
+                <div className="section-title">変更内容</div>
+                <div className="merge-preview">
+                  <div>数量: {previewData.before.qty} → {previewData.after.qty}</div>
+                  <div>
+                    平均単価: {asset.class === 'us_stock' ? 'USD' : 'JPY'} {
+                      asset.class === 'us_stock' ? previewData.before.avg_usd : previewData.before.avg_jpy
+                    } → {
+                      asset.class === 'us_stock' ? previewData.after.avg_usd : previewData.after.avg_jpy
+                    }
+                  </div>
+                  <div>簿価(円): {previewData.before.book_jpy.toLocaleString()} → {previewData.after.book_jpy.toLocaleString()}</div>
                 </div>
-                <div>簿価(円): {previewData.before.book_jpy.toLocaleString()} → {previewData.after.book_jpy.toLocaleString()}</div>
-              </div>
-              
-              <div className="modal-buttons">
-                <button onClick={() => setShowPreview(false)}>キャンセル</button>
-                <button onClick={handleSave} disabled={isSubmitting}>
-                  この内容で統合する
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <p>編集内容を確認してください</p>
-              <div className="edit-preview">
-                <div>クラス: {previewData.preview.class}</div>
-                <div>名称: {formData.name}</div>
-                <div>口座ID: {formData.account_id}</div>
-                {asset.class === 'us_stock' && (
-                  <>
-                    <div>ティッカー: {formData.ticker}</div>
-                    <div>数量: {formData.quantity}</div>
-                    <div>平均取得単価(USD): {formData.avg_price_usd}</div>
-                  </>
-                )}
-                {asset.class === 'jp_stock' && (
-                  <>
-                    <div>銘柄コード: {formData.code}</div>
-                    <div>数量: {formData.quantity}</div>
-                    <div>平均取得単価(JPY): {formData.avg_price_jpy}</div>
-                  </>
-                )}
-              </div>
-              
-              <div className="modal-buttons">
-                <button onClick={() => setShowPreview(false)}>キャンセル</button>
-                <button onClick={handleSave} disabled={isSubmitting}>
-                  この内容で保存する
-                </button>
-              </div>
-            </div>
-          )}
+                
+                <div className="modal-buttons">
+                  <button type="button" onClick={() => setShowPreview(false)}>
+                    キャンセル
+                  </button>
+                  <button type="button" onClick={handleSave} disabled={isSubmitting}>
+                    この内容で統合する
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="section-title">編集内容確認</div>
+                <div className="edit-preview">
+                  <div>クラス: {previewData.preview.class}</div>
+                  <div>名称: {formData.name}</div>
+                  <div>口座ID: {formData.account_id}</div>
+                  {asset.class === 'us_stock' && (
+                    <>
+                      <div>ティッカー: {formData.ticker}</div>
+                      <div>数量: {formData.quantity}</div>
+                      <div>平均取得単価(USD): {formData.avg_price_usd}</div>
+                    </>
+                  )}
+                  {asset.class === 'jp_stock' && (
+                    <>
+                      <div>銘柄コード: {formData.code}</div>
+                      <div>数量: {formData.quantity}</div>
+                      <div>平均取得単価(JPY): {formData.avg_price_jpy}</div>
+                    </>
+                  )}
+                </div>
+                
+                <div className="modal-buttons">
+                  <button type="button" onClick={() => setShowPreview(false)}>
+                    キャンセル
+                  </button>
+                  <button type="button" onClick={handleSave} disabled={isSubmitting}>
+                    この内容で保存する
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -544,40 +552,48 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
       {showAccountModal && (
         <div className="modal-overlay" style={{ zIndex: 1002 }}>
           <div className="modal-content">
-            <h3>口座を新規作成</h3>
-            <div className="form-row">
-              <label>証券会社</label>
-              <input
-                type="text"
-                value={newAccount.broker}
-                onChange={(e) => setNewAccount(prev => ({ ...prev, broker: e.target.value }))}
-                placeholder="例: SBI証券"
-              />
-            </div>
-            <div className="form-row">
-              <label>口座種別</label>
-              <select
-                value={newAccount.account_type}
-                onChange={(e) => setNewAccount(prev => ({ ...prev, account_type: e.target.value }))}
-              >
-                <option value="tokutei">特定</option>
-                <option value="ippan">一般</option>
-                <option value="nisa">NISA</option>
-              </select>
-            </div>
-            <div className="form-row">
-              <label>表示名（任意）</label>
-              <input
-                type="text"
-                value={newAccount.name}
-                onChange={(e) => setNewAccount(prev => ({ ...prev, name: e.target.value }))}
-                placeholder="例: SBI/特定"
-              />
-            </div>
-            <div className="modal-buttons">
-              <button type="button" onClick={() => setShowAccountModal(false)}>キャンセル</button>
-              <button type="button" onClick={handleCreateAccount}>保存する</button>
-            </div>
+            <h2>新規口座作成</h2>
+            <form onSubmit={(e) => e.preventDefault()}>
+              <div className="form-row">
+                <label>証券会社</label>
+                <input
+                  type="text"
+                  value={newAccount.broker}
+                  onChange={(e) => setNewAccount(prev => ({ ...prev, broker: e.target.value }))}
+                  placeholder="例: SBI証券"
+                  required
+                />
+              </div>
+              <div className="form-row">
+                <label>口座種別</label>
+                <select
+                  value={newAccount.account_type}
+                  onChange={(e) => setNewAccount(prev => ({ ...prev, account_type: e.target.value }))}
+                  required
+                >
+                  <option value="tokutei">特定</option>
+                  <option value="ippan">一般</option>
+                  <option value="nisa">NISA</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <label>表示名（任意）</label>
+                <input
+                  type="text"
+                  value={newAccount.name}
+                  onChange={(e) => setNewAccount(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="例: SBI/特定"
+                />
+              </div>
+              <div className="modal-buttons">
+                <button type="button" onClick={() => setShowAccountModal(false)}>
+                  キャンセル
+                </button>
+                <button type="button" onClick={handleCreateAccount}>
+                  作成
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

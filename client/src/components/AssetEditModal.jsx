@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import './edit-modal.css';
 
 const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
   const [formData, setFormData] = useState({

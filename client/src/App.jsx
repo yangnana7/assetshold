@@ -6,7 +6,7 @@ import AssetList from './pages/AssetList'
 import ImportExport from './pages/Import'
 import Login from './pages/Login'
 import UserManagement from './pages/UserManagement'
-import Duplicates from './pages/Duplicates'
+// import Duplicates from './pages/Duplicates' // 廃止: 新規登録フローに統合機能を内包
 // BDD-compliant components
 import CompsBDD from './pages/CompsBDD'
 import RebalanceBDD from './pages/RebalanceBDD'
@@ -36,8 +36,8 @@ function App() {
         return user && user.role === 'admin' ? <ImportExport /> : <Dashboard />
       case 'users':
         return user && user.role === 'admin' ? <UserManagement /> : <Dashboard />
-      case 'duplicates':
-        return user && user.role === 'admin' ? <Duplicates /> : <Dashboard />
+      // case 'duplicates': // 廃止: 新規登録フローに統合機能を内包
+      //   return user && user.role === 'admin' ? <Duplicates /> : <Dashboard />
       case 'rebalance':
         return <RebalanceBDD />
       case 'comps':

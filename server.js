@@ -104,8 +104,8 @@ app.use(session({
 // Market data providers (BDD requirement 4.3)
 const { makeStockProvider, makeFxProvider, makePreciousMetalProvider } = require('./providers/registry');
 
-// Duplicate detection service
-const DuplicateDetectionService = require('./server/duplicates/service');
+// 注意: DuplicateDetectionService は例外対応用として保持（改修案 2.レビュー結果サマリ参照）
+// const DuplicateDetectionService = require('./server/duplicates/service');
 
 // Merge utilities
 const { mergeUsPosition, mergeJpPosition, findMergeTarget } = require('./server/utils/merge');
@@ -115,8 +115,8 @@ const stockProvider = makeStockProvider(MARKET_ENABLE);
 const fxProvider = makeFxProvider(MARKET_ENABLE);
 const preciousMetalProvider = makePreciousMetalProvider(MARKET_ENABLE);
 
-// Initialize duplicate detection service
-const duplicateService = new DuplicateDetectionService(db);
+// 注意: 重複統合専用UIは廃止、サービスは例外対応用として保持
+// const duplicateService = new DuplicateDetectionService(db);
 
 // Cache strategy implementation (BDD requirement 4.4)
 
@@ -2200,7 +2200,9 @@ function insertClassSpecificData(record, assetId, callback) {
   }
 }
 
-// Duplicates API
+// 廃止: Duplicates API (改修案に従い手動統合UIを廃止)
+// 注意: サービスクラスは例外対応用として保持
+/*
 app.get('/api/duplicates', async (req, res) => {
   try {
     const groups = await duplicateService.findDuplicates();
@@ -2235,6 +2237,7 @@ app.post('/api/duplicates/ignore', async (req, res) => {
     res.status(400).json({ error: e.message || 'ignore_failed' });
   }
 });
+*/
 
 // Import CSV validation
 const { validateHeaders, validateRow } = require('./server/csv/normalize');
@@ -3076,94 +3079,25 @@ app.post('/api/settings/backup', requireAdmin, async (req, res) => {
   } catch { res.status(400).json({ error: 'bad_request' }); }
 });
 
-// Duplicate Detection and Management API endpoints
+// 廃止: Duplicate Detection and Management API endpoints
+// 改修案に従い手動統合UIを廃止、新規登録フローに自動統合を内包
 
-// GET /api/duplicates - Find duplicate assets
+/*
+// GET /api/duplicates - Find duplicate assets (廃止)
 app.get('/api/duplicates', requireAuth, async (req, res) => {
-  try {
-    const duplicateGroups = await duplicateService.findDuplicates();
-    
-    // Filter out groups with ignored duplicates from audit log
-    const filteredGroups = [];
-    
-    for (const group of duplicateGroups) {
-      const assetIds = group.assets.map(a => a.id);
-      
-      // Check if this group has been marked as "not duplicate"
-      const ignoredCheck = await new Promise((resolve) => {
-        db.get(
-          `SELECT id FROM audit_log 
-           WHERE action = 'IGNORE_DUPLICATES' 
-           AND new_values LIKE '%${assetIds.join(',')}%' 
-           ORDER BY created_at DESC LIMIT 1`,
-          (err, row) => {
-            resolve(!!row);
-          }
-        );
-      });
-      
-      if (!ignoredCheck) {
-        filteredGroups.push(group);
-      }
-    }
-    
-    res.json({
-      duplicate_groups: filteredGroups,
-      total_groups: filteredGroups.length,
-      total_assets: filteredGroups.reduce((sum, group) => sum + group.count, 0)
-    });
-  } catch (error) {
-    console.error('Duplicate detection error:', error);
-    res.status(500).json({ error: 'Failed to detect duplicates' });
-  }
+  // ... 手動統合UI用のAPIは不要となったため廃止
 });
 
-// POST /api/duplicates/merge - Merge duplicate assets
+// POST /api/duplicates/merge - Merge duplicate assets (廃止)
 app.post('/api/duplicates/merge', requireAdmin, async (req, res) => {
-  const { asset_ids, keep_asset_id } = req.body;
-  
-  if (!asset_ids || !Array.isArray(asset_ids) || asset_ids.length < 2) {
-    return res.status(400).json({ error: 'At least 2 asset IDs required for merge' });
-  }
-  
-  if (!keep_asset_id || !asset_ids.includes(keep_asset_id)) {
-    return res.status(400).json({ error: 'Keep asset ID must be in the list of assets to merge' });
-  }
-  
-  try {
-    const result = await duplicateService.mergeDuplicates(
-      asset_ids,
-      keep_asset_id,
-      req.session.user.id
-    );
-    
-    res.json(result);
-  } catch (error) {
-    console.error('Duplicate merge error:', error);
-    res.status(500).json({ error: 'Failed to merge duplicates' });
-  }
+  // ... 手動統合は新規登録時の自動統合に置き換え
 });
 
-// POST /api/duplicates/ignore - Mark assets as not duplicates
+// POST /api/duplicates/ignore - Mark assets as not duplicates (廃止) 
 app.post('/api/duplicates/ignore', requireAdmin, async (req, res) => {
-  const { asset_ids } = req.body;
-  
-  if (!asset_ids || !Array.isArray(asset_ids) || asset_ids.length < 2) {
-    return res.status(400).json({ error: 'At least 2 asset IDs required' });
-  }
-  
-  try {
-    const result = await duplicateService.markAsNotDuplicates(
-      asset_ids,
-      req.session.user.id
-    );
-    
-    res.json(result);
-  } catch (error) {
-    console.error('Duplicate ignore error:', error);
-    res.status(500).json({ error: 'Failed to ignore duplicates' });
-  }
+  // ... 統合判定は口座ID + 識別子の厳密一致により自動化
 });
+*/
 
 // CSV File Watcher
 function setupCsvWatcher() {

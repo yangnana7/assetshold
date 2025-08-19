@@ -103,7 +103,8 @@ const preciousMetalProvider = makePreciousMetalProvider(MARKET_ENABLE);
 // Cache strategy implementation (BDD requirement 4.4)
 
 // Centralized cache helpers (DRY)
-const { createCache } = require('./server/utils/cache');
+const { createCache, getFxFromCacheJPY } = require('./server/utils/cache');
+const { dbRun } = require('./server/utils/db');
 const { getCachedPrice, setCachedPrice, fetchWithCache } = createCache(db);
 // Inject commonly used services for route handlers (hotfix refresh commit)
 app.set('db', db);
@@ -138,6 +139,29 @@ function calculateCurrentValue(asset) {
 // Valuation calculation rules (BDD requirement 4.6)
 function roundDown2(x) {
   return Math.floor(x * 100) / 100;
+}
+
+// Helper: convert amount in given currency to JPY (supports JPY/USD/CNY)
+async function convertToJPY(amount, currency) {
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt < 0) throw new Error('amount_invalid');
+  const cur = String(currency || 'JPY').toUpperCase();
+  if (cur === 'JPY') return Math.floor(amt);
+  if (!['USD', 'CNY'].includes(cur)) throw new Error('currency_not_supported');
+  const pair = cur + 'JPY';
+  try {
+    const data = await fetchWithCache(fxKey(pair), CACHE_TTL.fx, () => fxProvider.getRate(pair));
+    const rate = Number(data.price);
+    if (!Number.isFinite(rate) || rate <= 0) throw new Error('fx_rate_unavailable');
+    return Math.floor(amt * rate);
+  } catch (e) {
+    // Fallback to cached rate if available
+    const cached = await getFxFromCacheJPY(db, cur);
+    if (Number.isFinite(cached) && cached > 0) {
+      return Math.floor(amt * cached);
+    }
+    throw new Error('fx_rate_unavailable');
+  }
 }
 
   async function calculateMarketValue(asset) {
@@ -1411,6 +1435,34 @@ app.get('/api/assets', async (req, res) => {
               }
             });
           });
+        } else if (asset.class === 'cash') {
+          db.get('SELECT * FROM cashes WHERE asset_id = ?', [asset.id], (err, details) => {
+            if (!err && details) {
+              asset.cash_details = details;
+            }
+            // Cash current value equals book value (no market drift)
+            asset.current_value_jpy = asset.book_value_jpy;
+            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+            asset.gain_loss_percentage = asset.book_value_jpy > 0 ? ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2) : "0.00";
+            
+            enhancedRows.push(asset);
+            completed++;
+            if (completed === rows.length) {
+              if (req.query.page) {
+                res.json({
+                  assets: enhancedRows,
+                  pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: total,
+                    totalPages: totalPages
+                  }
+                });
+              } else {
+                res.json(enhancedRows);
+              }
+            }
+          });
         } else {
           // Add current market value to asset
           asset.current_value_jpy = calculateCurrentValue(asset);
@@ -1595,6 +1647,16 @@ app.get('/api/assets/:id', async (req, res) => {
           res.json(asset);
         });
       });
+    } else if (asset.class === 'cash') {
+      db.get('SELECT * FROM cashes WHERE asset_id = ?', [asset.id], (err, details) => {
+        if (!err && details) {
+          asset.cash_details = details;
+        }
+        asset.current_value_jpy = asset.book_value_jpy;
+        asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+        asset.gain_loss_percentage = asset.book_value_jpy > 0 ? ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2) : "0.00";
+        res.json(asset);
+      });
     } else {
       // Handle other asset classes
       // Get latest market valuation if available
@@ -1638,6 +1700,9 @@ app.post('/api/assets', requireAuth, async (req, res) => {
     avg_price_usd,
     avg_price_jpy,
     fx_at_acq, // USD/JPY exchange rate at acquisition
+    // Cash-specific
+    currency,
+    balance,
     // Precious metal-specific fields
     metal,
     weight_g,
@@ -1676,6 +1741,14 @@ app.post('/api/assets', requireAuth, async (req, res) => {
       }
       if (!(parseFloat(quantity) > 0) || !(parseFloat(avg_price_jpy) > 0)) {
         return res.status(400).json({ error: 'quantity_invalid' });
+      }
+    } else if (assetClass === 'cash') {
+      const cur = String(currency || 'JPY').toUpperCase();
+      if (!['JPY', 'USD', 'CNY'].includes(cur)) {
+        return res.status(400).json({ error: 'currency_not_supported' });
+      }
+      if (!Number.isFinite(Number(balance))) {
+        return res.status(400).json({ error: 'balance_required' });
       }
     } else if (assetClass === 'precious_metal') {
       if (!metal || !weight_g || !unit_price_jpy) {
@@ -1872,6 +1945,24 @@ app.post('/api/assets', requireAuth, async (req, res) => {
       }
       
       // Create new asset (original logic with account_id support)
+      // Pre-compute book_value_jpy if missing (supports cash conversion)
+      let calculatedBookValue = book_value_jpy;
+      if (!calculatedBookValue) {
+        if (assetClass === 'us_stock' && fx_at_acq) {
+          calculatedBookValue = Math.floor(parseFloat(quantity) * parseFloat(avg_price_usd) * parseFloat(fx_at_acq));
+        } else if (assetClass === 'jp_stock') {
+          calculatedBookValue = Math.floor(parseFloat(quantity) * parseFloat(avg_price_jpy));
+        } else if (assetClass === 'precious_metal') {
+          calculatedBookValue = Math.floor(parseFloat(weight_g) * parseFloat(unit_price_jpy));
+        } else if (assetClass === 'cash') {
+          try {
+            calculatedBookValue = await convertToJPY(balance, currency || 'JPY');
+          } catch (e) {
+            return res.status(400).json({ error: e.message || 'fx_rate_unavailable' });
+          }
+        }
+      }
+
       return new Promise((resolve, reject) => {
         db.serialize(() => {
           db.run('BEGIN TRANSACTION');
@@ -1879,18 +1970,6 @@ app.post('/api/assets', requireAuth, async (req, res) => {
           const stmt = db.prepare(`INSERT INTO assets 
             (class, name, note, acquired_at, book_value_jpy, valuation_source, liquidity_tier, tags) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-          
-          // Calculate book_value_jpy if not provided
-          let calculatedBookValue = book_value_jpy;
-          if (!calculatedBookValue) {
-            if (assetClass === 'us_stock' && fx_at_acq) {
-              calculatedBookValue = Math.floor(parseFloat(quantity) * parseFloat(avg_price_usd) * parseFloat(fx_at_acq));
-            } else if (assetClass === 'jp_stock') {
-              calculatedBookValue = Math.floor(parseFloat(quantity) * parseFloat(avg_price_jpy));
-            } else if (assetClass === 'precious_metal') {
-              calculatedBookValue = Math.floor(parseFloat(weight_g) * parseFloat(unit_price_jpy));
-            }
-          }
           
           stmt.run(
             assetClass, name, note, acquired_at, calculatedBookValue, 
@@ -1938,6 +2017,18 @@ app.post('/api/assets', requireAuth, async (req, res) => {
                     return reject(err);
                   }
                   metalStmt.finalize();
+                  finishCreation();
+                });
+              } else if (assetClass === 'cash') {
+                const curUp = String(currency || 'JPY').toUpperCase();
+                const balNum = Number(balance || 0);
+                const cashStmt = db.prepare(`INSERT INTO cashes (asset_id, currency, balance) VALUES (?, ?, ?)`);
+                cashStmt.run(assetId, curUp, balNum, (err) => {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                  }
+                  cashStmt.finalize();
                   finishCreation();
                 });
               } else {
@@ -2005,6 +2096,9 @@ app.patch('/api/assets/:id', requireAdmin, async (req, res) => {
       code,
       quantity: jpQuantity,
       avg_price_jpy,
+      // cash
+      currency,
+      balance,
       // 再計算モード
       recalc = 'auto'
     } = req.body;
@@ -2039,6 +2133,13 @@ app.patch('/api/assets/:id', requireAdmin, async (req, res) => {
     } else if (assetClass === 'jp_stock') {
       currentClassData = await new Promise((resolve, reject) => {
         db.get('SELECT * FROM jp_stocks WHERE asset_id = ?', [assetId], (err, row) => {
+          if (err) return reject(err);
+          resolve(row);
+        });
+      });
+    } else if (assetClass === 'cash') {
+      currentClassData = await new Promise((resolve, reject) => {
+        db.get('SELECT * FROM cashes WHERE asset_id = ?', [assetId], (err, row) => {
           if (err) return reject(err);
           resolve(row);
         });
@@ -2377,6 +2478,42 @@ async function performAssetEdit(db, assetId, editData, currentAsset, currentClas
               });
             } else {
               completeEdit();
+            }
+          } else if (editData.class === 'cash') {
+            const updates = {};
+            if (editData.currency !== undefined && editData.currency !== null) updates.currency = String(editData.currency).toUpperCase();
+            if (editData.balance !== undefined && editData.balance !== null) {
+              const b = Number(editData.balance);
+              if (!Number.isFinite(b) || b < 0) {
+                db.run('ROLLBACK');
+                return reject(new Error('balance_invalid'));
+              }
+              updates.balance = b;
+            }
+            const applyRecomputeAndFinish = async () => {
+              try {
+                const newCurrency = updates.currency !== undefined ? updates.currency : (currentClassData?.currency || 'JPY');
+                const newBalance = updates.balance !== undefined ? updates.balance : Number(currentClassData?.balance || 0);
+                const newBook = await convertToJPY(newBalance, newCurrency);
+                await dbRun(db, 'UPDATE assets SET book_value_jpy = ?, updated_at = ? WHERE id = ?', [newBook, new Date().toISOString(), assetId]);
+              } catch (e) {
+                db.run('ROLLBACK');
+                return reject(e);
+              }
+              completeEdit();
+            };
+            if (Object.keys(updates).length > 0) {
+              const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+              const values = Object.values(updates).concat([assetId]);
+              db.run(`UPDATE cashes SET ${setClause} WHERE asset_id = ?`, values, (err) => {
+                if (err) {
+                  db.run('ROLLBACK');
+                  return reject(err);
+                }
+                applyRecomputeAndFinish();
+              });
+            } else {
+              applyRecomputeAndFinish();
             }
           }
         };

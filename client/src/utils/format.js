@@ -51,9 +51,10 @@ export function formatInt(amount) {
 }
 
 // Convert JPY amount to man-yen (rounded) and format with grouping
-export function formatManNumber(amountJpy) {
-  const man = Math.round((Number(amountJpy) || 0) / 10000)
-  return formatInt(man)
+export function formatManNumber(amount) {
+  // Interpret the input as already scaled for display (e.g., 万円単位の値)
+  // Avoid double division by 10000 in callers like Dashboard pie chart
+  return formatInt(Number(amount) || 0)
 }
 
 // JPY unit price formatter (two decimals)

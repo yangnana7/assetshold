@@ -914,7 +914,7 @@ app.get('/api/dashboard/allocation', async (req, res) => {
           ELSE a.class
         END as label,
         COUNT(*) as count,
-        SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as value
+        SUM(CASE WHEN v.value_jpy IS NOT NULL AND v.value_jpy > 0 THEN v.value_jpy ELSE a.book_value_jpy END) as value
       FROM assets a
       LEFT JOIN cashes c ON a.id = c.asset_id AND a.class = 'cash'
       LEFT JOIN (

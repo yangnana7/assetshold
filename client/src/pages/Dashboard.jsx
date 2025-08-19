@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [allocationData, setAllocationData] = useState(null)
   const [monthlyTrendData, setMonthlyTrendData] = useState(null)
   const [chartsLoading, setChartsLoading] = useState(true)
+  const [fxCny, setFxCny] = useState(null)
 
   // Assets list states
   const [assets, setAssets] = useState([])
@@ -45,6 +46,10 @@ export default function Dashboard() {
         setMarket(ms.data || null)
         setAllocationData(allocation.data)
         setMonthlyTrendData(monthlyTrend.data)
+        // Fetch CNYJPY in parallel (non-blocking)
+        axios.get('/api/market/fx/CNYJPY').then(r => {
+          if (r.data?.rate) setFxCny({ rate: r.data.rate, stale: !!r.data.stale, asOf: r.data.asOf })
+        }).catch(() => {})
       } catch (e) {
         setError('ダッシュボードの取得に失敗しました')
       } finally {
@@ -303,23 +308,39 @@ export default function Dashboard() {
 
                     // Market and book unit prices
                     let mUnitUsd = null, bUnitUsd = null, mUnitJpy = null, bUnitJpy = null
+                    let cashFxText = null
 
-                    if (cls === 'us_stock') {
-                      // Prefer explicit fields, fall back to current_value_jpy/qty and book_value_jpy/qty
-                      mUnitUsd = a.stock_details?.market_price_usd ?? a.market_price_usd ?? (a.current_value_jpy && qty > 0 && fx ? (a.current_value_jpy / fx.rate) / qty : null)
-                      bUnitUsd = a.stock_details?.avg_price_usd ?? (fx && qty > 0 ? (a.book_value_jpy / fx.rate) / qty : null)
-                      mUnitJpy = (mUnitUsd != null && fx) ? mUnitUsd * fx.rate : (a.current_value_jpy && qty > 0 ? a.current_value_jpy / qty : null)
-                      bUnitJpy = qty > 0 ? (a.book_value_jpy / qty) : null
-                    } else if (cls === 'jp_stock') {
-                      mUnitJpy = (a.current_value_jpy && qty > 0) ? (a.current_value_jpy / qty) : null
-                      bUnitJpy = a.stock_details?.avg_price_jpy ?? (qty > 0 ? (a.book_value_jpy / qty) : null)
-                    } else if (cls === 'precious_metal') {
-                      // Treat weight as quantity; unit prices may be provided
-                      bUnitJpy = a.precious_metal_details?.unit_price_jpy ?? null
-                      mUnitJpy = (a.current_value_jpy && qty > 0) ? (a.current_value_jpy / qty) : null
+                                         if (cls === 'us_stock') {
+                       // Prefer explicit fields, fall back to current_value_jpy/qty and book_value_jpy/qty
+                       mUnitUsd = a.stock_details?.market_price_usd ?? a.market_price_usd ?? (a.current_value_jpy && qty > 0 && fx ? (a.current_value_jpy / fx.rate) / qty : null)
+                       bUnitUsd = a.stock_details?.avg_price_usd ?? (fx && qty > 0 ? (a.book_value_jpy / fx.rate) / qty : null)
+                       mUnitJpy = (mUnitUsd != null && fx) ? mUnitUsd * fx.rate : (a.current_value_jpy && qty > 0 ? a.current_value_jpy / qty : null)
+                       bUnitJpy = qty > 0 ? (a.book_value_jpy / qty) : null
+                     } else if (cls === 'jp_stock') {
+                       mUnitJpy = (a.current_value_jpy && qty > 0) ? (a.current_value_jpy / qty) : null
+                       bUnitJpy = a.stock_details?.avg_price_jpy ?? (qty > 0 ? (a.book_value_jpy / qty) : null)
+                     } else if (cls === 'precious_metal') {
+                       // Treat weight as quantity; unit prices may be provided
+                       bUnitJpy = a.precious_metal_details?.unit_price_jpy ?? null
+                       mUnitJpy = (a.current_value_jpy && qty > 0) ? (a.current_value_jpy / qty) : null
+                     } else if (cls === 'cash') {
+                       const cur = (a.cash_details?.currency || 'JPY').toUpperCase()
+                       let rate = null
+                       if (cur === 'USD') rate = fx?.rate ?? null
+                       else if (cur === 'CNY') rate = fxCny?.rate ?? null
+                       else if (cur === 'JPY') rate = 1
+                       cashFxText = (rate != null) ? (cur + 'JPY ' + (Number(rate).toFixed(2))) : '-'
+                     }
+
+const bookTotal = a.book_value_jpy || 0
+                    let bookDisplay = formatJPY(bookTotal)
+                    if (cls === 'cash') {
+                      const cur = (a.cash_details?.currency || 'JPY').toUpperCase()
+                      const bal = Number(a.cash_details?.balance ?? 0)
+                      if (cur === 'USD') bookDisplay = formatUsd(bal)
+                      else if (cur === 'CNY') bookDisplay = '¥' + formatInt(bal) + ' (CNY)'
+                      else bookDisplay = formatJPY(bal)
                     }
-
-                    const bookTotal = a.book_value_jpy || 0
                     const currentTotal = (a.current_value_jpy ?? (mUnitJpy != null && qty > 0 ? Math.floor(mUnitJpy * qty) : null))
                     const pl = currentTotal != null ? (currentTotal - bookTotal) : 0
                     const plPct = (currentTotal != null && bookTotal > 0) ? (pl / bookTotal) * 100 : null
@@ -337,6 +358,8 @@ export default function Dashboard() {
                               <span>{mUnitUsd != null ? formatUsd(mUnitUsd) : '時価取得失敗'}</span>
                               <span className="text-xs text-muted-foreground">{mUnitJpy != null ? formatYenUnit(mUnitJpy) : '時価取得失敗'}</span>
                             </div>
+                          ) : cls === 'cash' ? (
+                            <span>{cashFxText}</span>
                           ) : (
                             <span>{mUnitJpy != null ? formatYenUnit(mUnitJpy) : '時価取得失敗'}</span>
                           )}
@@ -351,7 +374,7 @@ export default function Dashboard() {
                             <span>{bUnitJpy != null ? formatYenUnit(bUnitJpy) : '-'}</span>
                           )}
                         </td>
-                        <td className="py-2 pr-4 text-right font-mono">{formatJPY(bookTotal)}</td>
+                        <td className="py-2 pr-4 text-right font-mono">{bookDisplay}</td>
                         <td className="py-2 pr-4 text-right font-mono">{currentTotal != null ? formatJPY(currentTotal) : '時価取得失敗'}</td>
                         <td className={`py-2 pr-4 text-right font-mono ${plClass}`}>
                           <div className="flex flex-col items-end leading-tight">

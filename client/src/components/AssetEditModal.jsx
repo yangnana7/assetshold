@@ -21,6 +21,9 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
     // JP株専用
     code: '',
     avg_price_jpy: '',
+    // 現金専用
+    currency: 'JPY',
+    balance: '',
     // 再計算モード
     recalc: 'auto'
   });
@@ -50,6 +53,9 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
         fx_at_acq: '',
         code: asset.code || '',
         avg_price_jpy: asset.avg_price_jpy || '',
+        // 現金フィールド
+        currency: asset.currency || 'JPY',
+        balance: asset.balance || '',
         recalc: 'auto'
       });
     }
@@ -509,6 +515,37 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
                     className={errors.avg_price_jpy ? 'error' : ''}
                   />
                   {errors.avg_price_jpy && <span className="error-text">{errors.avg_price_jpy}</span>}
+                </div>
+              </>
+            )}
+
+            {/* 現金専用フィールド */}
+            {asset.class === 'cash' && (
+              <>
+                <div className="form-row">
+                  <label>通貨:</label>
+                  <input
+                    type="text"
+                    name="currency"
+                    value={formData.currency}
+                    onChange={handleInputChange}
+                    className={errors.currency ? 'error' : ''}
+                    placeholder="例: JPY, USD, CNY"
+                  />
+                  {errors.currency && <span className="error-text">{errors.currency}</span>}
+                </div>
+
+                <div className="form-row">
+                  <label>残高:</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    name="balance"
+                    value={formData.balance}
+                    onChange={handleInputChange}
+                    className={errors.balance ? 'error' : ''}
+                  />
+                  {errors.balance && <span className="error-text">{errors.balance}</span>}
                 </div>
               </>
             )}

@@ -251,6 +251,39 @@ function roundDown2(x) {
       };
     }
     
+    if (assetClass === 'cash' && asset.cash_details) {
+      const { currency, balance } = asset.cash_details;
+      
+      // JPYの場合は直接残高を返す
+      if (currency === 'JPY') {
+        return {
+          value_jpy: Math.floor(balance),
+          unit_price_jpy: 1,
+          as_of: new Date().toISOString(),
+          fx_context: null,
+          stale: false
+        };
+      }
+      
+      // 外貨の場合はFX換算が必要
+      const fxKey = `${currency}/JPY`;
+      
+      const fxData = await fetchWithCache(fxKey, CACHE_TTL.fx,
+        () => fxProvider.getQuote(currency, 'JPY')
+      );
+      
+      const rate = Number(fxData.rate);
+      const valueJpy = balance * rate;
+      
+      return {
+        value_jpy: Math.floor(valueJpy),
+        unit_price_jpy: roundDown2(rate),
+        as_of: fxData.asOf,
+        fx_context: `1 ${currency} = ${roundDown2(rate)} JPY`,
+        stale: fxData.stale
+      };
+    }
+    
     // For other asset classes (watch, collection, real_estate), default to manual
     throw new Error(`Market valuation not supported for asset class: ${assetClass}`);
     
@@ -1940,6 +1973,18 @@ app.post('/api/assets', requireAuth, async (req, res) => {
                   metalStmt.finalize();
                   finishCreation();
                 });
+              } else if (assetClass === 'cash') {
+                const cashStmt = db.prepare(`INSERT INTO cashes 
+                  (asset_id, currency, balance) 
+                  VALUES (?, ?, ?)`);
+                cashStmt.run(assetId, currency || 'JPY', parseFloat(balance) || 0, (err) => {
+                  if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                  }
+                  cashStmt.finalize();
+                  finishCreation();
+                });
               } else {
                 finishCreation();
               }
@@ -2043,14 +2088,21 @@ app.patch('/api/assets/:id', requireAdmin, async (req, res) => {
           resolve(row);
         });
       });
+    } else if (assetClass === 'cash') {
+      currentClassData = await new Promise((resolve, reject) => {
+        db.get('SELECT * FROM cashes WHERE asset_id = ?', [assetId], (err, row) => {
+          if (err) return reject(err);
+          resolve(row);
+        });
+      });
     }
 
-    if (!currentClassData) {
+    if (!currentClassData && ['us_stock', 'jp_stock', 'cash'].includes(assetClass)) {
       return res.status(404).json({ error: 'Class-specific data not found' });
     }
 
-    // 新規口座作成処理
-    let finalAccountId = account_id || currentClassData.account_id;
+    // 新規口座作成処理（株式のみ）
+    let finalAccountId = account_id || (currentClassData && currentClassData.account_id);
     if (account && !account_id) {
       const { broker, account_type, name: accountName } = account;
       if (!broker || !account_type) {
@@ -2378,6 +2430,27 @@ async function performAssetEdit(db, assetId, editData, currentAsset, currentClas
             } else {
               completeEdit();
             }
+          } else if (editData.class === 'cash') {
+            const updates = {};
+            if (editData.currency !== undefined) updates.currency = editData.currency;
+            if (editData.balance !== undefined) updates.balance = editData.balance;
+            
+            if (Object.keys(updates).length > 0) {
+              const setClause = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+              const values = Object.values(updates).concat([assetId]);
+              
+              db.run(`UPDATE cashes SET ${setClause} WHERE asset_id = ?`, values, (err) => {
+                if (err) {
+                  db.run('ROLLBACK');
+                  return reject(err);
+                }
+                completeEdit();
+              });
+            } else {
+              completeEdit();
+            }
+          } else {
+            completeEdit();
           }
         };
 
@@ -2636,6 +2709,15 @@ app.post('/api/valuations/:assetId/refresh', async (req, res) => {
             asset.precious_metal_details = details;
             await processMarketValuation(asset, req, res);
           });
+        } else if (asset.class === 'cash') {
+          db.get('SELECT * FROM cashes WHERE asset_id = ?', [assetId], async (err, details) => {
+            if (err || !details) {
+              return res.status(400).json({ error: 'Cash details not found' });
+            }
+
+            asset.cash_details = details;
+            await processMarketValuation(asset, req, res);
+          });
         } else {
           return res.status(400).json({ error: `Market valuation not supported for asset class: ${asset.class}` });
         }
@@ -2703,7 +2785,7 @@ app.post('/api/valuations/refresh-all', async (req, res) => {
 
   try {
     // Get all assets that support market valuation
-    const supportedAssetClasses = ['us_stock', 'jp_stock', 'precious_metal'];
+    const supportedAssetClasses = ['us_stock', 'jp_stock', 'precious_metal', 'cash'];
     const query = `SELECT * FROM assets WHERE class IN (${supportedAssetClasses.map(() => '?').join(',')})`;
     
     db.all(query, supportedAssetClasses, async (err, assets) => {
@@ -2727,6 +2809,9 @@ app.post('/api/valuations/refresh-all', async (req, res) => {
             detailsQuery = `SELECT * FROM ${detailsTable} WHERE asset_id = ?`;
           } else if (asset.class === 'precious_metal') {
             detailsTable = 'precious_metals';
+            detailsQuery = `SELECT * FROM ${detailsTable} WHERE asset_id = ?`;
+          } else if (asset.class === 'cash') {
+            detailsTable = 'cashes';
             detailsQuery = `SELECT * FROM ${detailsTable} WHERE asset_id = ?`;
           }
 
@@ -2786,11 +2871,13 @@ app.post('/api/valuations/refresh-all', async (req, res) => {
                 results.push({ asset_id: asset.id, name: asset.name, class: asset.class, value_jpy: valueJpy, market_price_usd: unitPriceUsd });
                 updatedCount++;
               } else {
-                // JP stocks and precious metals: keep existing calculation path
+                // JP stocks, precious metals, and cash: keep existing calculation path
                 if (asset.class === 'us_stock' || asset.class === 'jp_stock') {
                   asset.stock_details = details;
                 } else if (asset.class === 'precious_metal') {
                   asset.precious_metal_details = details;
+                } else if (asset.class === 'cash') {
+                  asset.cash_details = details;
                 }
                 // Calculate market valuation
                 const valuation = await calculateMarketValue(asset);

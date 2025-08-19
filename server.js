@@ -1654,8 +1654,8 @@ app.post('/api/assets', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'class_required' });
     }
     
-    // Account validation
-    if (!account_id && !account) {
+    // Account validation (only for stocks)
+    if ((assetClass === 'us_stock' || assetClass === 'jp_stock') && !account_id && !account) {
       return res.status(400).json({ error: 'account_required' });
     }
     
@@ -1683,9 +1683,9 @@ app.post('/api/assets', requireAuth, async (req, res) => {
       }
     }
     
-    // Handle account creation or lookup
+    // Handle account creation or lookup (only for stocks)
     let finalAccountId = account_id;
-    if (!finalAccountId && account) {
+    if ((assetClass === 'us_stock' || assetClass === 'jp_stock') && !finalAccountId && account) {
       const { broker, account_type, name: accountName } = account;
       if (!broker || !account_type) {
         return res.status(400).json({ error: 'account_required' });
@@ -1862,7 +1862,7 @@ app.post('/api/assets', requireAuth, async (req, res) => {
           preview: {
             class: assetClass,
             name,
-            account_id: finalAccountId,
+            ...(finalAccountId && { account_id: finalAccountId }),
             [assetClass === 'us_stock' ? 'ticker' : assetClass === 'jp_stock' ? 'code' : 'type']: 
               assetClass === 'us_stock' ? ticker : assetClass === 'jp_stock' ? code : metal,
             quantity: parseFloat(quantity) || parseFloat(weight_g),

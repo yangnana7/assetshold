@@ -78,8 +78,8 @@ function AssetList() {
   const isNewEditableAsset = (asset) => ['us_stock', 'jp_stock'].includes(asset.class)
 
   const filteredAssets = assets.filter(asset => 
-    asset.name.toLowerCase().includes(filter.toLowerCase()) ||
-    asset.note.toLowerCase().includes(filter.toLowerCase()) ||
+    (asset.name || '').toLowerCase().includes(filter.toLowerCase()) ||
+    (asset.note || '').toLowerCase().includes(filter.toLowerCase()) ||
     getAssetClassName(asset.class).toLowerCase().includes(filter.toLowerCase())
   )
 

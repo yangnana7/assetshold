@@ -462,7 +462,7 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
                       </div>
                       <div>
                         <label className="text-sm font-medium mb-1 block">単価（円/g）</label>
-                        <Input type="number" value={classFields.unit_price_jpy ?? 0} onChange={(e) => updateClassField('unit_price_jpy', Number(e.target.value) || 0)} min={0} step={1} required disabled={loading} />
+                        <Input type="number" value={classFields.unit_price_jpy ?? 0} onChange={(e) => updateClassField('unit_price_jpy', Number(e.target.value) || 0)} min={0} step={0.01} required disabled={loading} />
                       </div>
                     </div>
                   </>

@@ -277,6 +277,7 @@ which npm
 sudo systemctl daemon-reload
 sudo systemctl enable assetshold
 sudo systemctl start assetshold
+sudo systemctl restart assetshold
 
 # ステータス確認
 sudo systemctl status assetshold

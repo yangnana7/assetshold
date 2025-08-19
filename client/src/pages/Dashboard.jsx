@@ -99,7 +99,7 @@ export default function Dashboard() {
     if (!allocationData?.items) return []
     return allocationData.items.map(x => ({
       name: x.label,
-      value: Math.round(x.value / 10000), // Convert to 万円
+      value: (x.value / 10000), // Convert to 万円 with decimals
       percentage: x.percentage
     }))
   }, [allocationData])
@@ -207,7 +207,7 @@ export default function Dashboard() {
                   >
                     {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
-                  <Tooltip formatter={(v, n) => [`${formatManNumber(v)}万円`, n]} />
+                  <Tooltip formatter={(v, n) => [`${v.toFixed(2)}万円`, n]} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>

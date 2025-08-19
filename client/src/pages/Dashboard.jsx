@@ -3,7 +3,7 @@ import axios from 'axios'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card-simple'
 import { Button } from '@/components/ui/button-simple'
 import { Badge } from '@/components/ui/badge-simple'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar } from 'recharts'
 import { formatAssetName, formatUsd, formatManNumber, formatInt, formatYenUnit } from '../utils/format'
 import { Input } from '@/components/ui/input-simple'
 
@@ -14,6 +14,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState('')
+
+  // New chart data
+  const [allocationData, setAllocationData] = useState(null)
+  const [monthlyTrendData, setMonthlyTrendData] = useState(null)
+  const [chartsLoading, setChartsLoading] = useState(true)
 
   // Assets list states
   const [assets, setAssets] = useState([])
@@ -28,18 +33,23 @@ export default function Dashboard() {
   useEffect(() => {
     ;(async () => {
       try {
-        const [d, fxr, ms] = await Promise.all([
+        const [d, fxr, ms, allocation, monthlyTrend] = await Promise.all([
           axios.get('/api/dashboard'),
           axios.get('/api/market/fx/USDJPY').catch(() => ({ data: null })),
           axios.get('/api/market/status').catch(() => ({ data: null })),
+          axios.get('/api/dashboard/allocation').catch(() => ({ data: null })),
+          axios.get('/api/dashboard/monthly-trend').catch(() => ({ data: null })),
         ])
         setData(d.data)
         if (fxr.data?.rate) setFx({ rate: fxr.data.rate, stale: !!fxr.data.stale, asOf: fxr.data.asOf })
         setMarket(ms.data || null)
+        setAllocationData(allocation.data)
+        setMonthlyTrendData(monthlyTrend.data)
       } catch (e) {
         setError('ダッシュボードの取得に失敗しました')
       } finally {
         setLoading(false)
+        setChartsLoading(false)
       }
     })()
     // initial assets
@@ -86,11 +96,13 @@ export default function Dashboard() {
   }, [data])
 
   const pieData = useMemo(() => {
-    const list = (data?.assetsByClass || []).map(x => ({
-      name: getAssetClassName(x.class), value: x.total_value
+    if (!allocationData?.items) return []
+    return allocationData.items.map(x => ({
+      name: x.label,
+      value: Math.round(x.value / 10000), // Convert to 万円
+      percentage: x.percentage
     }))
-    return list
-  }, [data])
+  }, [allocationData])
 
   const filteredAssets = useMemo(() => {
     const q = (filter || '').trim().toLowerCase()
@@ -103,21 +115,27 @@ export default function Dashboard() {
     })
   }, [assets, filter])
 
-  const lineData = useMemo(() => {
-    const trend = (data?.monthlyTrend || []).slice().sort((a,b)=> (a.month > b.month ? 1 : -1))
-    return trend.map(it => ({ 
-      month: it.month, 
-      簿価総額: Math.round((it.book_value_total || 0) / 10000), 
-      評価額総額: Math.round((it.market_value_total || 0) / 10000) 
+  const barData = useMemo(() => {
+    if (!monthlyTrendData?.items) return []
+    return monthlyTrendData.items.map(item => ({
+      month: item.month_label,
+      資産追加数: item.assets_added,
+      簿価追加額: Math.round(item.book_value_added / 10000) // Convert to 万円
     }))
-  }, [data])
+  }, [monthlyTrendData])
 
   const refreshAll = async () => {
     try {
       setUpdating(true)
       await axios.post('/api/valuations/refresh-all')
-      const d = await axios.get('/api/dashboard')
+      const [d, allocation, monthlyTrend] = await Promise.all([
+        axios.get('/api/dashboard'),
+        axios.get('/api/dashboard/allocation'),
+        axios.get('/api/dashboard/monthly-trend')
+      ])
       setData(d.data)
+      setAllocationData(allocation.data)
+      setMonthlyTrendData(monthlyTrend.data)
     } catch (e) {
       alert('市場データの更新に失敗しました')
     } finally {
@@ -128,7 +146,10 @@ export default function Dashboard() {
   if (loading) return <div className="p-6 max-w-6xl mx-auto">Loading...</div>
   if (error) return <div className="p-6 max-w-6xl mx-auto"><div className="error">{error}</div></div>
 
-  const COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6']
+  const COLORS = [
+    '#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6',
+    '#ec4899', '#f97316', '#84cc16', '#06b6d4', '#a855f7', '#10b981'
+  ]
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -182,11 +203,11 @@ export default function Dashboard() {
                     nameKey="name"
                     cx="50%" cy="50%"
                     outerRadius={100}
-                    label={(p) => formatManNumber(p.value)}
+                    label={(p) => `${p.percentage}%`}
                   >
                     {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
-                  <Tooltip formatter={(v, n) => [formatManNumber(v), n]} />
+                  <Tooltip formatter={(v, n) => [`${formatManNumber(v)}万円`, n]} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>
@@ -197,24 +218,37 @@ export default function Dashboard() {
           <CardHeader>
             <div className="flex w-full items-center justify-between">
               <div>
-                <CardTitle>月次推移</CardTitle>
-                <CardDescription>簿価 vs 評価</CardDescription>
+                <CardTitle>月次資産追加推移</CardTitle>
+                <CardDescription>過去12ヶ月の資産追加状況</CardDescription>
               </div>
-              <div className="text-xs text-muted-foreground">単位：万円</div>
+              <div className="text-xs text-muted-foreground">簿価：万円</div>
             </div>
           </CardHeader>
           <CardContent>
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={lineData}>
+                <BarChart data={barData}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis tickFormatter={(v) => formatInt(v)} />
-                  <Tooltip formatter={(value, name) => [formatInt(value), name]} />
+                  <XAxis 
+                    dataKey="month" 
+                    tick={{ fontSize: 12 }}
+                    interval={0}
+                    angle={-45}
+                    textAnchor="end"
+                    height={60}
+                  />
+                  <YAxis yAxisId="count" orientation="left" tickFormatter={(v) => formatInt(v)} />
+                  <YAxis yAxisId="value" orientation="right" tickFormatter={(v) => formatInt(v)} />
+                  <Tooltip 
+                    formatter={(value, name) => [
+                      name === '資産追加数' ? `${value}件` : `${formatInt(value)}万円`, 
+                      name
+                    ]} 
+                  />
                   <Legend />
-                  <Line type="monotone" dataKey="簿価総額" stroke="#8b5cf6" />
-                  <Line type="monotone" dataKey="評価額総額" stroke="#22c55e" />
-                </LineChart>
+                  <Bar yAxisId="count" dataKey="資産追加数" fill="#0ea5e9" name="資産追加数" />
+                  <Bar yAxisId="value" dataKey="簿価追加額" fill="#22c55e" name="簿価追加額" />
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </CardContent>

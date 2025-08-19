@@ -894,6 +894,119 @@ app.get('/api/dashboard/class-summary', async (req, res) => {
   });
 });
 
+// Dashboard allocation data with currency-split cash assets
+app.get('/api/dashboard/allocation', async (req, res) => {
+  try {
+    const query = `
+      SELECT
+        CASE 
+          WHEN a.class = 'cash' THEN 'cash_' || COALESCE(c.currency, 'JPY')
+          ELSE a.class
+        END as category,
+        CASE 
+          WHEN a.class = 'cash' THEN COALESCE(c.currency, 'JPY') || '現金'
+          WHEN a.class = 'us_stock' THEN '米国株'
+          WHEN a.class = 'jp_stock' THEN '日本株'
+          WHEN a.class = 'precious_metal' THEN '貴金属'
+          WHEN a.class = 'watch' THEN '時計'
+          WHEN a.class = 'real_estate' THEN '不動産'
+          WHEN a.class = 'collection' THEN 'コレクション'
+          ELSE a.class
+        END as label,
+        COUNT(*) as count,
+        SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as value
+      FROM assets a
+      LEFT JOIN cashes c ON a.id = c.asset_id AND a.class = 'cash'
+      LEFT JOIN (
+        SELECT vv.asset_id, vv.value_jpy
+        FROM valuations vv
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) AS max_as_of, MAX(id) AS max_id
+          FROM valuations
+          GROUP BY asset_id
+        ) latest ON latest.asset_id = vv.asset_id 
+                    AND vv.as_of = latest.max_as_of 
+                    AND vv.id = latest.max_id
+      ) v ON a.id = v.asset_id
+      GROUP BY category, label
+      HAVING value > 0
+      ORDER BY value DESC
+    `;
+
+    db.all(query, [], (err, rows) => {
+      if (err) {
+        console.error('Allocation query error:', err);
+        return res.status(500).json({ error: 'データベースクエリエラー' });
+      }
+
+      const totalValue = rows.reduce((sum, row) => sum + (row.value || 0), 0);
+      const result = rows.map(row => ({
+        category: row.category,
+        label: row.label,
+        count: row.count,
+        value: Math.round(row.value || 0),
+        percentage: totalValue > 0 ? ((row.value || 0) / totalValue * 100).toFixed(1) : '0.0'
+      }));
+
+      res.json({ 
+        as_of: new Date().toISOString(),
+        total_value: Math.round(totalValue),
+        items: result 
+      });
+    });
+  } catch (error) {
+    console.error('Allocation endpoint error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Dashboard monthly trend data
+app.get('/api/dashboard/monthly-trend', async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        strftime('%Y-%m', a.created_at) as month,
+        COUNT(*) as assets_added,
+        SUM(a.book_value_jpy) as book_value_added
+      FROM assets a
+      WHERE a.created_at >= date('now', '-12 months')
+      GROUP BY strftime('%Y-%m', a.created_at)
+      ORDER BY month
+    `;
+
+    db.all(query, [], (err, rows) => {
+      if (err) {
+        console.error('Monthly trend query error:', err);
+        return res.status(500).json({ error: 'データベースクエリエラー' });
+      }
+
+      // Fill in missing months with zero values
+      const result = [];
+      const now = new Date();
+      for (let i = 11; i >= 0; i--) {
+        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const monthKey = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+        const monthData = rows.find(row => row.month === monthKey);
+        
+        result.push({
+          month: monthKey,
+          month_label: date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'short' }),
+          assets_added: monthData ? monthData.assets_added : 0,
+          book_value_added: Math.round(monthData ? monthData.book_value_added : 0)
+        });
+      }
+
+      res.json({ 
+        as_of: new Date().toISOString(),
+        items: result 
+      });
+    });
+  } catch (error) {
+    console.error('Monthly trend endpoint error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // User management routes (admin only)
 app.get('/api/users', requireAdmin, (req, res) => {
   db.all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC', (err, rows) => {

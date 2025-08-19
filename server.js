@@ -1628,6 +1628,29 @@ app.get('/api/assets/:id', async (req, res) => {
           res.json(asset);
         });
       });
+    } else if (asset.class === 'cash') {
+      // Handle cash assets
+      db.get('SELECT * FROM cashes WHERE asset_id = ?', [asset.id], (err, details) => {
+        if (!err && details) {
+          asset.cash_details = details;
+        }
+        
+        // Get latest market valuation if available
+        db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+          if (!err && valuation && valuation.value_jpy) {
+            // Use actual market valuation if available
+            asset.current_value_jpy = valuation.value_jpy;
+          } else {
+            // Fallback to legacy calculation
+            asset.current_value_jpy = calculateCurrentValue(asset);
+          }
+          
+          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+          
+          res.json(asset);
+        });
+      });
     } else {
       // Handle other asset classes
       // Get latest market valuation if available
@@ -2050,6 +2073,9 @@ app.patch('/api/assets/:id', requireAdmin, async (req, res) => {
       code,
       quantity: jpQuantity,
       avg_price_jpy,
+      // 現金専用
+      currency,
+      balance,
       // 再計算モード
       recalc = 'auto'
     } = req.body;

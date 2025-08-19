@@ -164,7 +164,22 @@ async function convertToJPY(amount, currency) {
   }
 }
 
-  async function calculateMarketValue(asset) {
+// Helper: process cash asset with details and valuation
+function processCashAsset(asset, callback) {
+  db.get('SELECT * FROM cashes WHERE asset_id = ?', [asset.id], (err, details) => {
+    if (!err && details) {
+      asset.cash_details = details;
+    }
+    // Cash current value equals book value (no market drift)
+    asset.current_value_jpy = asset.book_value_jpy;
+    asset.gain_loss_jpy = 0; // Cash has no gain/loss by definition
+    asset.gain_loss_percentage = "0.00";
+    
+    callback(asset);
+  });
+}
+
+async function calculateMarketValue(asset) {
   const assetClass = asset.class;
   
   try {
@@ -1436,16 +1451,8 @@ app.get('/api/assets', async (req, res) => {
             });
           });
         } else if (asset.class === 'cash') {
-          db.get('SELECT * FROM cashes WHERE asset_id = ?', [asset.id], (err, details) => {
-            if (!err && details) {
-              asset.cash_details = details;
-            }
-            // Cash current value equals book value (no market drift)
-            asset.current_value_jpy = asset.book_value_jpy;
-            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-            asset.gain_loss_percentage = asset.book_value_jpy > 0 ? ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2) : "0.00";
-            
-            enhancedRows.push(asset);
+          processCashAsset(asset, (processedAsset) => {
+            enhancedRows.push(processedAsset);
             completed++;
             if (completed === rows.length) {
               if (req.query.page) {
@@ -1648,14 +1655,8 @@ app.get('/api/assets/:id', async (req, res) => {
         });
       });
     } else if (asset.class === 'cash') {
-      db.get('SELECT * FROM cashes WHERE asset_id = ?', [asset.id], (err, details) => {
-        if (!err && details) {
-          asset.cash_details = details;
-        }
-        asset.current_value_jpy = asset.book_value_jpy;
-        asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-        asset.gain_loss_percentage = asset.book_value_jpy > 0 ? ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2) : "0.00";
-        res.json(asset);
+      processCashAsset(asset, (processedAsset) => {
+        res.json(processedAsset);
       });
     } else {
       // Handle other asset classes
@@ -2794,10 +2795,7 @@ app.post('/api/valuations/:assetId/refresh', async (req, res) => {
 
 async function processMarketValuation(asset, req, res) {
   try {
-    console.log('Processing market valuation for asset:', asset.id, asset.class, asset.name);
-    console.log('Asset precious_metal_details:', asset.precious_metal_details);
     const valuation = await calculateMarketValue(asset);
-    console.log('Calculated valuation:', valuation);
     
     // Save to valuations table
     db.run(

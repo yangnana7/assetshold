@@ -32,6 +32,7 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
 
   const isStock = useMemo(() => ['us_stock', 'jp_stock'].includes(common.class), [common.class])
   const isMetal = useMemo(() => common.class === 'precious_metal', [common.class])
+  const needsAccount = useMemo(() => isStock, [isStock])
 
   // Load accounts on mount
   useEffect(() => {
@@ -139,7 +140,10 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
 
   // Check if form is valid
   const isFormValid = () => {
-    if (!common.class || !common.name || !common.liquidity_tier || !accountFields.account_id) {
+    if (!common.class || !common.name || !common.liquidity_tier) {
+      return false
+    }
+    if (needsAccount && !accountFields.account_id) {
       return false
     }
     
@@ -159,8 +163,12 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
     const payload = { 
       ...common, 
       ...classFields, 
-      account_id: accountFields.account_id,
       dry_run: dryRun
+    }
+    
+    // Only add account_id for assets that need accounts
+    if (needsAccount) {
+      payload.account_id = accountFields.account_id
     }
     
     if (common.class === 'us_stock' && accountFields.fx_at_acq) {
@@ -256,34 +264,36 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
                   />
                 </div>
 
-                <div>
-                  <label className="text-sm font-medium mb-1 block">口座</label>
-                  <div className="flex gap-2">
-                    <select
-                      className="flex-1 px-3 py-2 border rounded-md"
-                      value={accountFields.account_id}
-                      onChange={(e) => updateAccountField('account_id', e.target.value)}
-                      required
-                      disabled={loading}
-                    >
-                      <option value="">口座を選択してください</option>
-                      {accounts.map(account => (
-                        <option key={account.id} value={account.id}>
-                          {account.name} ({account.broker}/{account.account_type})
-                        </option>
-                      ))}
-                    </select>
-                    <Button 
-                      type="button" 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={() => setShowAccountModal(true)}
-                      disabled={loading}
-                    >
-                      <Plus className="w-4 h-4" />
-                    </Button>
+                {needsAccount && (
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">口座</label>
+                    <div className="flex gap-2">
+                      <select
+                        className="flex-1 px-3 py-2 border rounded-md"
+                        value={accountFields.account_id}
+                        onChange={(e) => updateAccountField('account_id', e.target.value)}
+                        required
+                        disabled={loading}
+                      >
+                        <option value="">口座を選択してください</option>
+                        {accounts.map(account => (
+                          <option key={account.id} value={account.id}>
+                            {account.name} ({account.broker}/{account.account_type})
+                          </option>
+                        ))}
+                      </select>
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => setShowAccountModal(true)}
+                        disabled={loading}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {common.class === 'us_stock' && (
                   <div>
@@ -606,8 +616,8 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
                     <div>
                       <p className="text-sm font-medium text-gray-700">対象</p>
                       <p className="text-sm">
-                        {common.class === 'us_stock' ? classFields.ticker : classFields.code} / 
-                        口座ID: {accountFields.account_id}
+                        {common.class === 'us_stock' ? classFields.ticker : classFields.code}
+                        {needsAccount && ` / 口座ID: ${accountFields.account_id}`}
                       </p>
                     </div>
                     <div>
@@ -653,9 +663,11 @@ export default function AssetCreateModal({ onClose, onAssetCreated }) {
                     <p className="text-sm">
                       <span className="font-medium">クラス:</span> {mergePreview.preview?.class}
                     </p>
-                    <p className="text-sm">
-                      <span className="font-medium">口座:</span> {mergePreview.preview?.account_id}
-                    </p>
+                    {needsAccount && (
+                      <p className="text-sm">
+                        <span className="font-medium">口座:</span> {mergePreview.preview?.account_id}
+                      </p>
+                    )}
                     {mergePreview.preview?.ticker && (
                       <p className="text-sm">
                         <span className="font-medium">ティッカー:</span> {mergePreview.preview.ticker}

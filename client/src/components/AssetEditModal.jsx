@@ -3,6 +3,8 @@ import axios from 'axios';
 import './edit-modal.css';
 
 const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
+  const isStock = asset?.class && ['us_stock', 'jp_stock'].includes(asset.class);
+  const needsAccount = isStock;
   const [formData, setFormData] = useState({
     name: '',
     note: '',
@@ -127,7 +129,7 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
     if (!formData.name?.trim()) {
       newErrors.name = '名称は必須です';
     }
-    if (!formData.account_id) {
+    if (needsAccount && !formData.account_id) {
       newErrors.account_id = '口座を選択してください';
     }
 
@@ -175,7 +177,7 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
         avg_price_usd: formData.avg_price_usd ? Number(formData.avg_price_usd) : undefined,
         avg_price_jpy: formData.avg_price_jpy ? Number(formData.avg_price_jpy) : undefined,
         fx_at_acq: formData.fx_at_acq ? Number(formData.fx_at_acq) : undefined,
-        account_id: Number(formData.account_id),
+        ...(needsAccount && { account_id: Number(formData.account_id) }),
         dry_run: true
       };
 
@@ -208,7 +210,7 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
         avg_price_usd: formData.avg_price_usd ? Number(formData.avg_price_usd) : undefined,
         avg_price_jpy: formData.avg_price_jpy ? Number(formData.avg_price_jpy) : undefined,
         fx_at_acq: formData.fx_at_acq ? Number(formData.fx_at_acq) : undefined,
-        account_id: Number(formData.account_id),
+        ...(needsAccount && { account_id: Number(formData.account_id) }),
         dry_run: false
       };
 
@@ -241,7 +243,7 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
             {previewData.merged ? (
               <>
                 <div className="section-title">統合対象</div>
-                <p>対象: {asset.class} / {asset?.class === 'us_stock' ? formData.ticker : formData.code} / 口座ID:{formData.account_id}</p>
+                <p>対象: {asset.class} / {asset?.class === 'us_stock' ? formData.ticker : formData.code}{needsAccount ? ` / 口座ID:${formData.account_id}` : ''}</p>
                 <p>統合方式: {previewData.method}（{previewData.method === 'unit' ? '取得時為替を使用' : '比例スケール'}）</p>
                 
                 <div className="section-title">変更内容</div>
@@ -272,7 +274,7 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
                 <div className="edit-preview">
                   <div>クラス: {previewData.preview.class}</div>
                   <div>名称: {formData.name}</div>
-                  <div>口座ID: {formData.account_id}</div>
+                  {needsAccount && <div>口座ID: {formData.account_id}</div>}
                   {asset.class === 'us_stock' && (
                     <>
                       <div>ティッカー: {formData.ticker}</div>
@@ -320,28 +322,30 @@ const AssetEditModal = ({ isOpen, onClose, asset, onAssetUpdated }) => {
               <input type="text" value={asset.class} disabled />
             </div>
 
-            <div className="form-row">
-              <label>口座:</label>
-              <div className="form-row-buttons">
-                <select
-                  name="account_id"
-                  value={formData.account_id}
-                  onChange={handleInputChange}
-                  className={errors.account_id ? 'error' : ''}
-                >
-                  <option value="">口座を選択してください</option>
-                  {accounts.map(account => (
-                    <option key={account.id} value={account.id}>
-                      {account.name || `${account.broker}/${account.account_type}`}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" onClick={() => setShowAccountModal(true)}>
-                  口座を新規作成
-                </button>
+            {needsAccount && (
+              <div className="form-row">
+                <label>口座:</label>
+                <div className="form-row-buttons">
+                  <select
+                    name="account_id"
+                    value={formData.account_id}
+                    onChange={handleInputChange}
+                    className={errors.account_id ? 'error' : ''}
+                  >
+                    <option value="">口座を選択してください</option>
+                    {accounts.map(account => (
+                      <option key={account.id} value={account.id}>
+                        {account.name || `${account.broker}/${account.account_type}`}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => setShowAccountModal(true)}>
+                    口座を新規作成
+                  </button>
+                </div>
+                {errors.account_id && <span className="error-text">{errors.account_id}</span>}
               </div>
-              {errors.account_id && <span className="error-text">{errors.account_id}</span>}
-            </div>
+            )}
 
             <div className="form-row">
               <label>名称:</label>

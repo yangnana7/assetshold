@@ -3,7 +3,7 @@ import axios from 'axios'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card-simple'
 import { Button } from '@/components/ui/button-simple'
 import { Badge } from '@/components/ui/badge-simple'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar, Rectangle } from 'recharts'
 import { formatAssetName, formatUsd, formatManNumber, formatInt, formatYenUnit } from '../utils/format'
 import { Input } from '@/components/ui/input-simple'
 
@@ -91,13 +91,11 @@ export default function Dashboard() {
 
   const totals = useMemo(() => {
     if (!data) return { assets: 0, market: 0, book: 0, diff: 0 }
-    const assets = data.totalAssets?.[0]?.count || 0
-    const trendSorted = (data.monthlyTrend || []).slice().sort((a,b)=> (a.month > b.month ? 1 : -1))
-    const latest = trendSorted.slice(-1)[0]
-    const marketTotal = latest?.market_value_total ?? data.totalValue?.[0]?.total ?? 0
-    const bookTotal = latest?.book_value_total ?? 0
-    const diff = marketTotal - bookTotal
-    return { assets, market: marketTotal, book: bookTotal, diff }
+    const assetsCount = data.totalAssets?.[0]?.count || 0
+    const marketTotal = data.totalValue?.[0]?.total || 0      // 最新評価額の総和
+    const bookTotal   = data.totalBookValue?.[0]?.total || 0  // 簿価総額（新規追加クエリ）
+    const diff        = marketTotal - bookTotal
+    return { assets: assetsCount, market: marketTotal, book: bookTotal, diff }
   }, [data])
 
   const pieData = useMemo(() => {
@@ -124,8 +122,8 @@ export default function Dashboard() {
     if (!monthlyTrendData?.items) return []
     return monthlyTrendData.items.map(item => ({
       month: item.month_label,
-      資産追加数: item.assets_added,
-      簿価追加額: Math.round(item.book_value_added / 10000) // Convert to 万円
+      簿価: Math.round((item.book_value_total || 0) / 10000),      // 万円換算
+      評価額: Math.round((item.market_value_total || 0) / 10000),  // 万円換算
     }))
   }, [monthlyTrendData])
 
@@ -223,10 +221,10 @@ export default function Dashboard() {
           <CardHeader>
             <div className="flex w-full items-center justify-between">
               <div>
-                <CardTitle>月次資産追加推移</CardTitle>
-                <CardDescription>過去12ヶ月の資産追加状況</CardDescription>
+                <CardTitle>月次推移（簿価 vs 評価額）</CardTitle>
+                <CardDescription>過去12ヶ月の簿価と評価額</CardDescription>
               </div>
-              <div className="text-xs text-muted-foreground">簿価：万円</div>
+              <div className="text-xs text-muted-foreground">単位：万円</div>
             </div>
           </CardHeader>
           <CardContent>
@@ -242,17 +240,23 @@ export default function Dashboard() {
                     textAnchor="end"
                     height={60}
                   />
-                  <YAxis yAxisId="count" orientation="left" tickFormatter={(v) => formatInt(v)} />
-                  <YAxis yAxisId="value" orientation="right" tickFormatter={(v) => formatInt(v)} />
-                  <Tooltip 
-                    formatter={(value, name) => [
-                      name === '資産追加数' ? `${value}件` : `${formatInt(value)}万円`, 
-                      name
-                    ]} 
-                  />
+                  <YAxis tickFormatter={(v) => formatInt(v)} />
+                  <Tooltip formatter={(value, name) => [formatInt(value), name]} />
                   <Legend />
-                  <Bar yAxisId="count" dataKey="資産追加数" fill="#0ea5e9" name="資産追加数" />
-                  <Bar yAxisId="value" dataKey="簿価追加額" fill="#22c55e" name="簿価追加額" />
+                  <Bar
+                    dataKey="簿価"
+                    name="簿価"
+                    fill="#7dbde8"
+                    isAnimationActive={false}
+                    shape={(props) => <Rectangle {...props} aria-label="簿価" aria-roledescription="bar" />}
+                  />
+                  <Bar
+                    dataKey="評価額"
+                    name="評価額"
+                    fill="#f6a623"
+                    isAnimationActive={false}
+                    shape={(props) => <Rectangle {...props} aria-label="評価額" aria-roledescription="bar" />}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>

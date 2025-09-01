@@ -719,6 +719,8 @@ app.get('/api/dashboard', async (req, res) => {
 
   const queries = {
     totalAssets: `SELECT COUNT(*) as count FROM assets`,
+    // Add totalBookValue to return full portfolio book value directly
+    totalBookValue: `SELECT SUM(book_value_jpy) as total FROM assets`,
     totalValue: `
       SELECT SUM(COALESCE(v.value_jpy, a.book_value_jpy)) as total 
       FROM assets a
@@ -963,14 +965,27 @@ app.get('/api/dashboard/allocation', async (req, res) => {
 // Dashboard monthly trend data
 app.get('/api/dashboard/monthly-trend', async (req, res) => {
   try {
+    // Return monthly totals for the last 12 months: book_value_total and market_value_total
     const query = `
-      SELECT 
-        strftime('%Y-%m', a.created_at) as month,
-        COUNT(*) as assets_added,
-        SUM(a.book_value_jpy) as book_value_added
+      SELECT
+        strftime('%Y-%m', a.created_at) AS month,
+        SUM(a.book_value_jpy) AS book_value_total,
+        SUM(COALESCE(v.value_jpy, a.book_value_jpy)) AS market_value_total
       FROM assets a
+      LEFT JOIN (
+        SELECT vv.asset_id, vv.value_jpy
+        FROM valuations vv
+        INNER JOIN (
+          SELECT asset_id, MAX(as_of) AS max_as_of, MAX(id) AS max_id
+          FROM valuations
+          GROUP BY asset_id
+        ) latest
+          ON latest.asset_id = vv.asset_id
+         AND vv.as_of = latest.max_as_of
+         AND vv.id = latest.max_id
+      ) v ON a.id = v.asset_id
       WHERE a.created_at >= date('now', '-12 months')
-      GROUP BY strftime('%Y-%m', a.created_at)
+      GROUP BY month
       ORDER BY month
     `;
 
@@ -980,26 +995,22 @@ app.get('/api/dashboard/monthly-trend', async (req, res) => {
         return res.status(500).json({ error: 'データベースクエリエラー' });
       }
 
-      // Fill in missing months with zero values
+      // Fill in missing months with zero values and add month_label (ja-JP short)
       const result = [];
       const now = new Date();
       for (let i = 11; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const monthKey = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
         const monthData = rows.find(row => row.month === monthKey);
-        
         result.push({
           month: monthKey,
           month_label: date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'short' }),
-          assets_added: monthData ? monthData.assets_added : 0,
-          book_value_added: Math.round(monthData ? monthData.book_value_added : 0)
+          book_value_total: monthData ? Math.round(monthData.book_value_total || 0) : 0,
+          market_value_total: monthData ? Math.round(monthData.market_value_total || 0) : 0,
         });
       }
 
-      res.json({ 
-        as_of: new Date().toISOString(),
-        items: result 
-      });
+      res.json({ as_of: new Date().toISOString(), items: result });
     });
   } catch (error) {
     console.error('Monthly trend endpoint error:', error);

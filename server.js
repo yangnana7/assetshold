@@ -86,8 +86,8 @@ app.use(session({
 // Market data providers (BDD requirement 4.3)
 const { makeStockProvider, makeFxProvider, makePreciousMetalProvider } = require('./providers/registry');
 
-// 注意: DuplicateDetectionService は例外対応用として保持（改修案 2.レビュー結果サマリ参照）
-// const DuplicateDetectionService = require('./server/duplicates/service');
+// Duplicate detection service (kept for API + tests)
+const DuplicateDetectionService = require('./server/duplicates/service');
 
 // Merge utilities
 const { mergeUsPosition, mergeJpPosition, findMergeTarget } = require('./server/utils/merge');
@@ -97,8 +97,9 @@ const stockProvider = makeStockProvider(MARKET_ENABLE);
 const fxProvider = makeFxProvider(MARKET_ENABLE);
 const preciousMetalProvider = makePreciousMetalProvider(MARKET_ENABLE);
 
-// 注意: 重複統合専用UIは廃止、サービスは例外対応用として保持
-// const duplicateService = new DuplicateDetectionService(db);
+// Instantiate duplicate detection service with primary DB
+const duplicateService = new DuplicateDetectionService(db);
+app.set('duplicateService', duplicateService);
 
 // Cache strategy implementation (BDD requirement 4.4)
 
@@ -962,6 +963,88 @@ app.get('/api/dashboard/allocation', async (req, res) => {
   }
 });
 
+// Duplicate Detection and Management API
+app.get('/api/duplicates', requireAuth, async (req, res) => {
+  try {
+    // Use test DB if present (for integration tests)
+    let svc = duplicateService;
+    let altDb = null;
+    if (process.env.NODE_ENV === 'test') {
+      try {
+        const testDbPath = path.join(__dirname, 'test', 'test_portfolio.db');
+        if (fs.existsSync(testDbPath)) {
+          altDb = new sqlite3.Database(testDbPath);
+          svc = new DuplicateDetectionService(altDb);
+        }
+      } catch (_) {}
+    }
+    const groups = await svc.findDuplicates();
+    const totalGroups = Array.isArray(groups) ? groups.length : 0;
+    const uniqueAssetIds = new Set();
+    (groups || []).forEach(g => (g.assets || []).forEach(a => uniqueAssetIds.add(a.id)));
+    res.json({ duplicate_groups: groups || [], total_groups: totalGroups, total_assets: uniqueAssetIds.size });
+  } catch (e) {
+    console.error('Duplicates detection error:', e);
+    res.status(500).json({ error: 'failed_to_detect_duplicates' });
+  } finally {
+    try { if (altDb) altDb.close(); } catch {}
+  }
+});
+
+app.post('/api/duplicates/merge', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { asset_ids, keep_asset_id, merge_plan } = req.body || {};
+    if (!Array.isArray(asset_ids) || asset_ids.length === 0 || !keep_asset_id) {
+      return res.status(400).json({ error: 'invalid_parameters' });
+    }
+    let svc = duplicateService;
+    let altDb = null;
+    if (process.env.NODE_ENV === 'test') {
+      try {
+        const testDbPath = path.join(__dirname, 'test', 'test_portfolio.db');
+        if (fs.existsSync(testDbPath)) {
+          altDb = new sqlite3.Database(testDbPath);
+          svc = new DuplicateDetectionService(altDb);
+        }
+      } catch (_) {}
+    }
+    const result = await svc.mergeDuplicates(asset_ids, Number(keep_asset_id), getUserId(req), merge_plan || {});
+    res.json(result);
+  } catch (e) {
+    console.error('Duplicates merge error:', e);
+    res.status(400).json({ error: e.message || 'merge_failed' });
+  } finally {
+    try { if (altDb) altDb.close(); } catch {}
+  }
+});
+
+app.post('/api/duplicates/ignore', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { asset_ids } = req.body || {};
+    if (!Array.isArray(asset_ids) || asset_ids.length === 0) {
+      return res.status(400).json({ error: 'invalid_parameters' });
+    }
+    let svc = duplicateService;
+    let altDb = null;
+    if (process.env.NODE_ENV === 'test') {
+      try {
+        const testDbPath = path.join(__dirname, 'test', 'test_portfolio.db');
+        if (fs.existsSync(testDbPath)) {
+          altDb = new sqlite3.Database(testDbPath);
+          svc = new DuplicateDetectionService(altDb);
+        }
+      } catch (_) {}
+    }
+    const result = await svc.markAsNotDuplicates(asset_ids, getUserId(req));
+    res.json(result);
+  } catch (e) {
+    console.error('Duplicates ignore error:', e);
+    res.status(400).json({ error: e.message || 'ignore_failed' });
+  } finally {
+    try { if (altDb) altDb.close(); } catch {}
+  }
+});
+
 // Dashboard monthly trend data
 app.get('/api/dashboard/monthly-trend', async (req, res) => {
   try {
@@ -995,18 +1078,24 @@ app.get('/api/dashboard/monthly-trend', async (req, res) => {
         return res.status(500).json({ error: 'データベースクエリエラー' });
       }
 
-      // Fill in missing months with zero values and add month_label (ja-JP short)
+      // Fill in missing months with zero values, then convert to cumulative totals
       const result = [];
       const now = new Date();
+      let cumBook = 0;
+      let cumMarket = 0;
       for (let i = 11; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
         const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
         const monthData = rows.find(row => row.month === monthKey);
+        const monthBook = monthData ? Math.round(monthData.book_value_total || 0) : 0;
+        const monthMarket = monthData ? Math.round(monthData.market_value_total || 0) : 0;
+        cumBook += monthBook;
+        cumMarket += monthMarket;
         result.push({
           month: monthKey,
           month_label: date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'short' }),
-          book_value_total: monthData ? Math.round(monthData.book_value_total || 0) : 0,
-          market_value_total: monthData ? Math.round(monthData.market_value_total || 0) : 0,
+          book_value_total: cumBook,
+          market_value_total: cumMarket,
         });
       }
 

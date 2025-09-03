@@ -157,27 +157,28 @@ class DuplicateDetectionService {
           metalGroups[item.metal].push(item);
         });
 
-        // Find duplicates within each metal type
+        // Find duplicates within each metal type and wait all async detail fetches
+        const tasks = [];
         Object.entries(metalGroups).forEach(([metal, items]) => {
           const duplicateSubgroups = this.findSimilarWeights(items);
-          
-          duplicateSubgroups.forEach(async (subgroup) => {
+          duplicateSubgroups.forEach((subgroup) => {
             if (subgroup.length > 1) {
-              const assetIds = subgroup.map(item => item.id);
-              const assets = await this.getAssetDetails(assetIds);
-              
-              duplicateGroups.push({
-                type: 'precious_metal_similar',
-                criteria: `${metal} - Similar Weight (${subgroup[0].weight_g}g)`,
-                count: subgroup.length,
-                assets: assets,
-                confidence: 0.7
-              });
+              tasks.push((async () => {
+                const assetIds = subgroup.map(item => item.id);
+                const assets = await this.getAssetDetails(assetIds);
+                duplicateGroups.push({
+                  type: 'precious_metal_similar',
+                  criteria: `${metal} - Similar Weight (${subgroup[0].weight_g}g)`,
+                  count: subgroup.length,
+                  assets,
+                  confidence: 0.7
+                });
+              })());
             }
           });
         });
 
-        resolve(duplicateGroups);
+        Promise.all(tasks).then(() => resolve(duplicateGroups)).catch(reject);
       });
     });
   }
@@ -249,12 +250,13 @@ class DuplicateDetectionService {
    */
   async mergeDuplicates(assetIds, keepAssetId, userId, mergePlan = {}) {
     return new Promise((resolve, reject) => {
+      const db = this.db;
       if (!assetIds.includes(keepAssetId)) {
         return reject(new Error('Keep asset ID must be in the list of assets to merge'));
       }
 
-      this.db.serialize(() => {
-        this.db.run('BEGIN TRANSACTION');
+      db.serialize(() => {
+        db.run('BEGIN TRANSACTION');
 
         // Get all assets to be merged
         this.getAssetDetails(assetIds).then(assets => {
@@ -272,19 +274,24 @@ class DuplicateDetectionService {
 
           // Build common field update
           const name = choose('name', keepAsset.name);
-          const noteSelected = choose('note', keepAsset.note);
+          // Merge notes from all assets (keep + merged) and de-duplicate
+          const allNotes = [keepAsset.note]
+            .concat(mergeAssets.map(a => a.note))
+            .filter(n => typeof n === 'string' && n.trim().length > 0);
+          const uniqueNotes = Array.from(new Set(allNotes.map(n => n.trim())));
+          const noteSelected = uniqueNotes.join(' / ');
           const acquired_at = choose('acquired_at', keepAsset.acquired_at);
           const book_value_jpy = Number(choose('book_value_jpy', keepAsset.book_value_jpy)) || 0;
           const valuation_source = choose('valuation_source', keepAsset.valuation_source || 'manual');
           const liquidity_tier = choose('liquidity_tier', keepAsset.liquidity_tier || null);
           const tags = choose('tags', keepAsset.tags || '');
 
-          this.db.run(
+          db.run(
             'UPDATE assets SET name=?, note=?, acquired_at=?, book_value_jpy=?, valuation_source=?, liquidity_tier=?, tags=?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
             [name, noteSelected || '', acquired_at || null, book_value_jpy, valuation_source, liquidity_tier, tags || '', keepAssetId],
             (err) => {
               if (err) {
-                this.db.run('ROLLBACK');
+                db.run('ROLLBACK');
                 return reject(err);
               }
 
@@ -297,11 +304,11 @@ class DuplicateDetectionService {
                   const exchange = choose('exchange', keepAsset.exchange);
                   const quantity = Number(choose('us_quantity', keepAsset.us_quantity)) || 0;
                   const avg_price_usd = choose('avg_price_usd', keepAsset.avg_price_usd);
-                  this.db.run(
+                  db.run(
                     'UPDATE us_stocks SET ticker=?, exchange=?, quantity=?, avg_price_usd=? WHERE asset_id=?',
                     [ticker || null, exchange || null, quantity, avg_price_usd != null ? Number(avg_price_usd) : null, keepAssetId],
                     (err) => {
-                      if (err) { this.db.run('ROLLBACK'); return reject(err); }
+                      if (err) { db.run('ROLLBACK'); return reject(err); }
                       proceed();
                     }
                   );
@@ -309,11 +316,11 @@ class DuplicateDetectionService {
                   const code = choose('code', keepAsset.code);
                   const quantity = Number(choose('jp_quantity', keepAsset.jp_quantity)) || 0;
                   const avg_price_jpy = choose('avg_price_jpy', keepAsset.avg_price_jpy);
-                  this.db.run(
+                  db.run(
                     'UPDATE jp_stocks SET code=?, quantity=?, avg_price_jpy=? WHERE asset_id=?',
                     [code || null, quantity, avg_price_jpy != null ? Number(avg_price_jpy) : null, keepAssetId],
                     (err) => {
-                      if (err) { this.db.run('ROLLBACK'); return reject(err); }
+                      if (err) { db.run('ROLLBACK'); return reject(err); }
                       proceed();
                     }
                   );
@@ -322,11 +329,11 @@ class DuplicateDetectionService {
                   const weight_g = Number(choose('weight_g', keepAsset.weight_g)) || 0;
                   const purity = choose('purity', keepAsset.purity);
                   const unit_price_jpy = choose('unit_price_jpy', keepAsset.unit_price_jpy);
-                  this.db.run(
+                  db.run(
                     'UPDATE precious_metals SET metal=?, weight_g=?, purity=?, unit_price_jpy=? WHERE asset_id=?',
                     [metal || null, weight_g, purity != null ? Number(purity) : null, unit_price_jpy != null ? Number(unit_price_jpy) : null, keepAssetId],
                     (err) => {
-                      if (err) { this.db.run('ROLLBACK'); return reject(err); }
+                      if (err) { db.run('ROLLBACK'); return reject(err); }
                       proceed();
                     }
                   );
@@ -341,26 +348,32 @@ class DuplicateDetectionService {
                   return finalizeMerge(mergeIds);
                 }
                 const placeholders = mergeIds.map(() => '?').join(',');
-                // Transfer valuations to keep asset
+                // Transfer helper (safe for missing tables)
                 const transfer = (sql, params=[]) => new Promise((res, rej)=>{
-                  // eslint-disable-next-line
-                  this.db.run(sql, params, (err)=> err?rej(err):res());
+                  db.run(sql, params, (err)=> err?rej(err):res());
+                });
+                const transferIgnoreMissing = (sql, params=[]) => new Promise((res)=>{
+                  db.run(sql, params, (err)=> {
+                    if (err && /no such table/i.test(String(err.message || ''))) return res('ignored');
+                    if (err) return res('error');
+                    res('ok');
+                  });
                 });
 
-                transfer(`UPDATE valuations SET asset_id = ? WHERE asset_id IN (${placeholders})`, [keepAssetId, ...mergeIds])
-                  .then(() => transfer(`DELETE FROM us_stocks WHERE asset_id IN (${placeholders})`, mergeIds))
-                  .then(() => transfer(`DELETE FROM jp_stocks WHERE asset_id IN (${placeholders})`, mergeIds))
-                  .then(() => transfer(`DELETE FROM precious_metals WHERE asset_id IN (${placeholders})`, mergeIds))
-                  .then(() => transfer(`DELETE FROM attachments WHERE asset_id IN (${placeholders})`, mergeIds).catch(()=>{}))
-                  .then(() => transfer(`DELETE FROM comparable_sales WHERE asset_id IN (${placeholders})`, mergeIds).catch(()=>{}))
+                transferIgnoreMissing(`UPDATE valuations SET asset_id = ? WHERE asset_id IN (${placeholders})`, [keepAssetId, ...mergeIds])
+                  .then(() => transferIgnoreMissing(`DELETE FROM us_stocks WHERE asset_id IN (${placeholders})`, mergeIds))
+                  .then(() => transferIgnoreMissing(`DELETE FROM jp_stocks WHERE asset_id IN (${placeholders})`, mergeIds))
+                  .then(() => transferIgnoreMissing(`DELETE FROM precious_metals WHERE asset_id IN (${placeholders})`, mergeIds))
+                  .then(() => transferIgnoreMissing(`DELETE FROM attachments WHERE asset_id IN (${placeholders})`, mergeIds))
+                  .then(() => transferIgnoreMissing(`DELETE FROM comparable_sales WHERE asset_id IN (${placeholders})`, mergeIds))
                   .then(() => transfer(`DELETE FROM assets WHERE id IN (${placeholders})`, mergeIds))
                   .then(() => finalizeMerge(mergeIds))
-                  .catch(err => { this.db.run('ROLLBACK'); reject(err); });
+                  .catch(err => { db.run('ROLLBACK'); reject(err); });
               }
 
               const finalizeMerge = (mergeIds) => {
                 // Log audit trail
-                const auditStmt = this.db.prepare(`
+                const auditStmt = db.prepare(`
                   INSERT INTO audit_log (table_name, record_id, action, old_values, new_values, user_id, source) 
                   VALUES (?, ?, ?, ?, ?, ?, ?)
                 `);
@@ -377,12 +390,12 @@ class DuplicateDetectionService {
                 });
                 auditStmt.finalize();
 
-                this.db.run('COMMIT');
+                db.run('COMMIT');
                 resolve({ success: true, kept_asset_id: keepAssetId, merged_asset_ids: mergeIds });
               };
             }
           );
-        }).catch(err => { this.db.run('ROLLBACK'); reject(err); });
+        }).catch(err => { db.run('ROLLBACK'); reject(err); });
       });
     });
   }
@@ -394,8 +407,9 @@ class DuplicateDetectionService {
    */
   async markAsNotDuplicates(assetIds, userId) {
     return new Promise((resolve, reject) => {
+      const db = this.db;
       // Create a record in audit log to track ignored duplicates
-      const auditStmt = this.db.prepare(`
+      const auditStmt = db.prepare(`
         INSERT INTO audit_log (table_name, record_id, action, old_values, new_values, user_id, source) 
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `);

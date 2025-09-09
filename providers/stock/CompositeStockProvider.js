@@ -49,7 +49,13 @@ class CompositeStockProvider extends StockProvider {
       return yahoo || candidates[0];
     }
 
-    // Diverge a lot: take average as a conservative estimate
+    // If they diverge significantly (>25%), trust Yahoo over averaging
+    if (diffPct >= 0.25) {
+      const yahoo = candidates.find(c => c.source === 'yahoo');
+      if (yahoo) return yahoo;
+    }
+
+    // Moderate divergence: take average as a conservative estimate
     const avg = (p1 + p2) / 2;
     return new PricePoint(avg, candidates[0].currency || expected, new Date().toISOString());
   }
@@ -71,4 +77,3 @@ class CompositeStockProvider extends StockProvider {
 }
 
 module.exports = CompositeStockProvider;
-

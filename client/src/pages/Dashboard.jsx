@@ -6,8 +6,12 @@ import { Badge } from '@/components/ui/badge-simple'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar, Rectangle } from 'recharts'
 import { formatAssetName, formatUsd, formatManNumber, formatInt, formatYenUnit } from '../utils/format'
 import { Input } from '@/components/ui/input-simple'
+import ValuationEditModal from '../components/ValuationEditModal'
+import { useAuth } from '../hooks/useAuth'
 
-export default function Dashboard() {
+export default function Dashboard({ onNavigateAssetsByClass }) {
+  const { user } = useAuth()
+  const isEditor = !!(user && user.role === 'admin')
   const [data, setData] = useState(null)
   const [fx, setFx] = useState(null)
   const [market, setMarket] = useState(null)
@@ -19,6 +23,7 @@ export default function Dashboard() {
   const [allocationData, setAllocationData] = useState(null)
   const [monthlyTrendData, setMonthlyTrendData] = useState(null)
   const [chartsLoading, setChartsLoading] = useState(true)
+  const [classSummary, setClassSummary] = useState(null)
   const [fxCny, setFxCny] = useState(null)
 
   // Assets list states
@@ -30,22 +35,25 @@ export default function Dashboard() {
   const [totalAssetCount, setTotalAssetCount] = useState(0)
   const ASSETS_PER_PAGE = 30
   const [filter, setFilter] = useState('')
+  const [valAsset, setValAsset] = useState(null)
 
   useEffect(() => {
     ;(async () => {
       try {
-        const [d, fxr, ms, allocation, monthlyTrend] = await Promise.all([
+        const [d, fxr, ms, allocation, monthlyTrend, classSum] = await Promise.all([
           axios.get('/api/dashboard'),
           axios.get('/api/market/fx/USDJPY').catch(() => ({ data: null })),
           axios.get('/api/market/status').catch(() => ({ data: null })),
           axios.get('/api/dashboard/allocation').catch(() => ({ data: null })),
           axios.get('/api/dashboard/monthly-trend').catch(() => ({ data: null })),
+          axios.get('/api/dashboard/class-summary').catch(() => ({ data: null })),
         ])
         setData(d.data)
         if (fxr.data?.rate) setFx({ rate: fxr.data.rate, stale: !!fxr.data.stale, asOf: fxr.data.asOf })
         setMarket(ms.data || null)
         setAllocationData(allocation.data)
         setMonthlyTrendData(monthlyTrend.data)
+        setClassSummary(classSum.data)
         // Fetch CNYJPY in parallel (non-blocking)
         axios.get('/api/market/fx/CNYJPY').then(r => {
           if (r.data?.rate) setFxCny({ rate: r.data.rate, stale: !!r.data.stale, asOf: r.data.asOf })
@@ -89,6 +97,18 @@ export default function Dashboard() {
     }
   }
 
+  const handleClearValuation = async (asset) => {
+    if (!window.confirm(`「${asset.name}」の最新の手動評価を無効化し、簿価ベースに戻します。よろしいですか？`)) {
+      return
+    }
+    try {
+      await axios.delete(`/api/valuations/manual/latest/${asset.id}`)
+      await fetchAssets(currentPage)
+    } catch (e) {
+      alert('評価の無効化に失敗しました（権限または評価未登録の可能性）')
+    }
+  }
+
   const totals = useMemo(() => {
     if (!data) return { assets: 0, market: 0, book: 0, diff: 0 }
     const assetsCount = data.totalAssets?.[0]?.count || 0
@@ -126,6 +146,39 @@ export default function Dashboard() {
       評価額: Math.round((item.market_value_total || 0) / 10000),  // 万円換算
     }))
   }, [monthlyTrendData])
+
+  const classBarData = useMemo(() => {
+    if (!classSummary?.items) return []
+    return classSummary.items.map(it => ({
+      クラス: getAssetClassName(it.class),
+      classKey: it.class,
+      簿価: Math.round((it.book_total_jpy || 0) / 10000),
+      評価額: Math.round((it.market_total_jpy || 0) / 10000),
+      件数: it.count || 0,
+    }))
+  }, [classSummary])
+
+  const handleClassBarClick = (entry /*, index */) => {
+    const key = entry?.payload?.classKey
+    if (key && typeof onNavigateAssetsByClass === 'function') {
+      onNavigateAssetsByClass(key)
+    }
+  }
+
+  // Legend toggle for class bar & monthly bar
+  const [visibleClassSeries, setVisibleClassSeries] = useState({ '簿価': true, '評価額': true })
+  const toggleClassSeries = (o) => {
+    const key = o?.dataKey || o?.value
+    if (!key) return
+    setVisibleClassSeries(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const [visibleMonthlySeries, setVisibleMonthlySeries] = useState({ '簿価': true, '評価額': true })
+  const toggleMonthlySeries = (o) => {
+    const key = o?.dataKey || o?.value
+    if (!key) return
+    setVisibleMonthlySeries(prev => ({ ...prev, [key]: !prev[key] }))
+  }
 
   const refreshAll = async () => {
     try {
@@ -242,13 +295,14 @@ export default function Dashboard() {
                   />
                   <YAxis tickFormatter={(v) => formatInt(v)} />
                   <Tooltip formatter={(value, name) => [formatInt(value), name]} />
-                  <Legend />
+                  <Legend onClick={toggleMonthlySeries} />
                   <Bar
                     dataKey="簿価"
                     name="簿価"
                     fill="#7dbde8"
                     isAnimationActive={false}
                     shape={(props) => <Rectangle {...props} aria-label="簿価" aria-roledescription="bar" />}
+                    hide={!visibleMonthlySeries['簿価']}
                   />
                   <Bar
                     dataKey="評価額"
@@ -256,6 +310,7 @@ export default function Dashboard() {
                     fill="#f6a623"
                     isAnimationActive={false}
                     shape={(props) => <Rectangle {...props} aria-label="評価額" aria-roledescription="bar" />}
+                    hide={!visibleMonthlySeries['評価額']}
                   />
                 </BarChart>
               </ResponsiveContainer>
@@ -263,6 +318,33 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex w-full items-center justify-between">
+            <div>
+              <CardTitle>資産別 簿価 vs 評価額</CardTitle>
+              <CardDescription>クラス別の簿価と評価額の比較</CardDescription>
+            </div>
+            <div className="text-xs text-muted-foreground">単位：万円</div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="h-[320px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={classBarData} margin={{ top: 8, right: 16, left: 0, bottom: 24 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="クラス" interval={0} angle={-20} textAnchor="end" height={50} />
+                <YAxis tickFormatter={(v) => formatInt(v)} />
+                <Tooltip formatter={(v, n) => [formatInt(v), n]} />
+                <Legend onClick={toggleClassSeries} />
+                <Bar dataKey="簿価" name="簿価" fill="#60a5fa" isAnimationActive={false} onClick={handleClassBarClick} cursor="pointer" hide={!visibleClassSeries['簿価']} />
+                <Bar dataKey="評価額" name="評価額" fill="#34d399" isAnimationActive={false} onClick={handleClassBarClick} cursor="pointer" hide={!visibleClassSeries['評価額']} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -301,6 +383,7 @@ export default function Dashboard() {
                     <th className="py-2 pr-4 text-right">評価額</th>
                     <th className="py-2 pr-4 text-right">評価損益</th>
                     <th className="py-2 pr-4">評価ソース</th>
+                    {isEditor && <th className="py-2 pr-4 text-right">操作</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -387,6 +470,12 @@ const bookTotal = a.book_value_jpy || 0
                           </div>
                         </td>
                         <td className="py-2 pr-4">{a.valuation_source || 'manual'}</td>
+                        {isEditor && (
+                          <td className="py-2 pr-4 text-right flex gap-2 justify-end">
+                            <Button variant="outline" size="sm" onClick={() => setValAsset(a)}>評価編集</Button>
+                            <Button variant="outline" size="sm" onClick={() => handleClearValuation(a)}>評価解除</Button>
+                          </td>
+                        )}
                       </tr>
                     )
                   })}
@@ -403,6 +492,15 @@ const bookTotal = a.book_value_jpy || 0
           )}
         </CardContent>
       </Card>
+
+      {valAsset && (
+        <ValuationEditModal
+          asset={valAsset}
+          isOpen={!!valAsset}
+          onClose={() => setValAsset(null)}
+          onSaved={async () => { await fetchAssets(currentPage); setValAsset(null); }}
+        />
+      )}
     </div>
   )
 }

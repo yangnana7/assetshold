@@ -1,41 +1,56 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import axios from 'axios'
 import { formatCurrency, formatUsd, formatDate, formatAssetName } from '../utils/format'
 import AssetEditModalBDD from '../components/AssetEditModalBDD'
 import AssetEditModal from '../components/AssetEditModal'
 import AssetCreateModal from '../components/AssetCreateModal'
+import ValuationEditModal from '../components/ValuationEditModal'
 
-function AssetList() {
+function AssetList({ classFilter = '', onClearClassFilter }) {
   const [assets, setAssets] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [editingAsset, setEditingAsset] = useState(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [filter, setFilter] = useState('')
+  const [page, setPage] = useState(1)
+  const [limit] = useState(20)
+  const [totalPages, setTotalPages] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [activeClass, setActiveClass] = useState(classFilter)
+  const [valAsset, setValAsset] = useState(null)
   
   // Unified edit modal (BDD)
   const [isEditOpen, setIsEditOpen] = useState(false)
 
   useEffect(() => {
-    fetchAssets()
-  }, [])
+    fetchAssets(page)
+  }, [page, activeClass])
 
-  const fetchAssets = async () => {
+  useEffect(() => {
+    // Sync external classFilter (e.g., from dashboard drill-down)
+    setActiveClass(classFilter || '')
+    setPage(1)
+  }, [classFilter])
+
+  const fetchAssets = async (targetPage = 1) => {
     try {
-      const response = await axios.get('/api/assets', { withCredentials: true })
-      
-      // Fetch detailed information for each asset
-      const assetsWithDetails = await Promise.all(response.data.map(async (asset) => {
-        try {
-          const detailResponse = await axios.get(`/api/assets/${asset.id}`, { withCredentials: true })
-          return detailResponse.data
-        } catch (detailError) {
-          console.warn(`Failed to fetch details for asset ${asset.id}:`, detailError)
-          return asset
-        }
-      }))
-      
-      setAssets(assetsWithDetails)
+      const response = await axios.get('/api/assets', { 
+        withCredentials: true,
+        params: activeClass ? { page: targetPage, limit, class: activeClass } : { page: targetPage, limit }
+      })
+
+      // API returns { assets, pagination } when paginated
+      if (Array.isArray(response.data)) {
+        setAssets(response.data)
+        setTotalPages(1)
+        setTotal(response.data.length)
+      } else {
+        setAssets(response.data.assets || [])
+        const p = response.data.pagination || { page: 1, limit, total: 0, totalPages: 1 }
+        setTotalPages(p.totalPages || 1)
+        setTotal(p.total || 0)
+      }
     } catch (error) {
       setError('資産データの取得に失敗しました')
       console.error('Assets fetch error:', error)
@@ -56,10 +71,23 @@ function AssetList() {
 
     try {
       await axios.delete(`/api/assets/${asset.id}`, { withCredentials: true })
-      setAssets(assets.filter(a => a.id !== asset.id))
+      // 再取得（ページングを維持）
+      await fetchAssets(page)
     } catch (error) {
       setError('削除に失敗しました')
       console.error('Delete error:', error)
+    }
+  }
+
+  const handleClearValuation = async (asset) => {
+    if (!window.confirm(`「${asset.name}」の最新の手動評価を無効化し、簿価ベースに戻します。よろしいですか？`)) {
+      return
+    }
+    try {
+      await axios.delete(`/api/valuations/manual/latest/${asset.id}`, { withCredentials: true })
+      await fetchAssets(page)
+    } catch (e) {
+      alert('評価の無効化に失敗しました（権限または評価未登録の可能性）')
     }
   }
 
@@ -70,18 +98,62 @@ function AssetList() {
   }
 
   const handleAssetCreated = (newAsset) => {
-    setAssets([newAsset, ...assets])
+    // 先頭ページに戻って最新を確認
     setShowCreateModal(false)
+    setPage(1)
   }
 
   const isEditableAsset = (asset) => ['us_stock', 'jp_stock', 'precious_metal', 'watch', 'real_estate', 'collection', 'cash'].includes(asset.class)
   const isNewEditableAsset = (asset) => ['us_stock', 'jp_stock'].includes(asset.class)
 
-  const filteredAssets = assets.filter(asset => 
-    (asset.name || '').toLowerCase().includes(filter.toLowerCase()) ||
-    (asset.note || '').toLowerCase().includes(filter.toLowerCase()) ||
-    getAssetClassName(asset.class).toLowerCase().includes(filter.toLowerCase())
-  )
+  const filteredAssets = useMemo(() => {
+    const f = (filter || '').toLowerCase()
+    if (!f) return assets
+    return assets.filter(asset =>
+      (asset.name || '').toLowerCase().includes(f) ||
+      (asset.note || '').toLowerCase().includes(f) ||
+      getAssetClassName(asset.class).toLowerCase().includes(f)
+    )
+  }, [assets, filter])
+
+  const canPrev = page > 1
+  const canNext = page < totalPages
+  const goToPage = (p) => {
+    if (p < 1 || p > totalPages || p === page) return
+    setLoading(true)
+    setPage(p)
+  }
+
+  const renderPagination = () => {
+    if (totalPages <= 1) return null
+
+    // Build compact page list: first, prev, current neighbors, last
+    const pages = new Set([1, page - 1, page, page + 1, totalPages])
+    const normalized = [...pages].filter(p => p >= 1 && p <= totalPages).sort((a,b)=>a-b)
+
+    const items = []
+    for (let i = 0; i < normalized.length; i++) {
+      const p = normalized[i]
+      items.push(
+        <button
+          key={p}
+          className={`pagination-btn ${p === page ? 'active' : ''}`}
+          onClick={() => goToPage(p)}
+        >{p}</button>
+      )
+      if (i < normalized.length - 1 && normalized[i+1] - p > 1) {
+        items.push(<span className="pagination-ellipsis" key={`e-${p}`}>…</span>)
+      }
+    }
+
+    return (
+      <div className="pagination">
+        <button className={`pagination-btn ${!canPrev ? 'disabled' : ''}`} onClick={() => canPrev && goToPage(page - 1)} disabled={!canPrev}>前</button>
+        {items}
+        <button className={`pagination-btn ${!canNext ? 'disabled' : ''}`} onClick={() => canNext && goToPage(page + 1)} disabled={!canNext}>次</button>
+      </div>
+    )
+  }
 
   if (loading) return <div className="p-6 max-w-6xl mx-auto">Loading...</div>
   if (error) return <div className="p-6 max-w-6xl mx-auto"><div className="error">{error}</div></div>
@@ -97,6 +169,13 @@ function AssetList() {
           新規登録
         </button>
       </div>
+
+      {activeClass && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+          <span style={{ padding: '4px 8px', background: '#eef2ff', color: '#3730a3', borderRadius: '12px', fontSize: '12px' }}>クラス: {getAssetClassName(activeClass)}</span>
+          <button className="btn" onClick={() => { setActiveClass(''); setPage(1); onClearClassFilter && onClearClassFilter(); }}>フィルタ解除</button>
+        </div>
+      )}
 
       <div style={{ marginBottom: '1rem' }}>
         <input
@@ -142,14 +221,28 @@ function AssetList() {
                 <td>{asset.liquidity_tier}</td>
                 <td>
                   {isEditableAsset(asset) && (
-                    <button 
-                      className="btn"
-                      onClick={() => handleEdit(asset)}
-                      style={{ marginRight: '0.5rem' }}
-                    >
-                      編集
-                    </button>
+                  <button 
+                    className="btn"
+                    onClick={() => handleEdit(asset)}
+                    style={{ marginRight: '0.5rem' }}
+                  >
+                    編集
+                  </button>
                   )}
+                  <button 
+                    className="btn"
+                    onClick={() => setValAsset(asset)}
+                    style={{ marginRight: '0.5rem' }}
+                  >
+                    評価編集
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => handleClearValuation(asset)}
+                    style={{ marginRight: '0.5rem' }}
+                  >
+                    評価解除
+                  </button>
                   <button 
                     className="btn btn-danger"
                     onClick={() => handleDelete(asset)}
@@ -169,6 +262,9 @@ function AssetList() {
           資産が見つかりませんでした
         </p>
       )}
+
+      {/* Pagination */}
+      {renderPagination()}
 
       {editingAsset && (
         <>
@@ -202,6 +298,15 @@ function AssetList() {
         <AssetCreateModal
           onClose={() => setShowCreateModal(false)}
           onAssetCreated={handleAssetCreated}
+        />
+      )}
+
+      {valAsset && (
+        <ValuationEditModal
+          asset={valAsset}
+          isOpen={!!valAsset}
+          onClose={() => setValAsset(null)}
+          onSaved={async () => { await fetchAssets(page); setValAsset(null); }}
         />
       )}
     </div>

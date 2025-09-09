@@ -15,6 +15,7 @@ import { useAuth } from './hooks/useAuth'
 function App() {
   const { user, loading, login, logout } = useAuth()
   const [currentPage, setCurrentPage] = useState('dashboard')
+  const [assetListClassFilter, setAssetListClassFilter] = useState('')
 
   // Redirect admin users to assets page after login
   useEffect(() => {
@@ -30,9 +31,11 @@ function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'assets':
-        return user && user.role === 'admin' ? <AssetList /> : <Dashboard />
+        return user && user.role === 'admin' 
+          ? <AssetList classFilter={assetListClassFilter} onClearClassFilter={() => setAssetListClassFilter('')} /> 
+          : <Dashboard onNavigateAssetsByClass={(cls) => { setAssetListClassFilter(cls); setCurrentPage('assets') }} />
       case 'users':
-        return user && user.role === 'admin' ? <UserManagement /> : <Dashboard />
+        return user && user.role === 'admin' ? <UserManagement /> : <Dashboard onNavigateAssetsByClass={(cls) => { setAssetListClassFilter(cls); setCurrentPage('assets') }} />
       // case 'duplicates': // 廃止: 新規登録フローに統合機能を内包
       //   return user && user.role === 'admin' ? <Duplicates /> : <Dashboard />
       case 'rebalance':
@@ -44,7 +47,7 @@ function App() {
       case 'login':
         return <Login onLogin={login} />
       default:
-        return <Dashboard />
+        return <Dashboard onNavigateAssetsByClass={(cls) => { setAssetListClassFilter(cls); setCurrentPage('assets') }} />
     }
   }
 

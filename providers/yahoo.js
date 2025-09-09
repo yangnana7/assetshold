@@ -10,13 +10,14 @@ class YahooStockProvider extends StockProvider {
 
   async getQuote(ticker, exchange) {
     try {
+      const normTicker = this._normalizeTicker(ticker);
       if (exchange === 'JP') {
         // Fetch real data from Yahoo Finance Japan
-        const realData = await this._fetchJapaneseStockPrice(ticker);
+        const realData = await this._fetchJapaneseStockPrice(normTicker);
         return new PricePoint(realData.price, 'JPY', new Date().toISOString());
       } else {
         // For US stocks, fetch real data from Yahoo Finance US
-        const realData = await this._fetchUSStockPrice(ticker);
+        const realData = await this._fetchUSStockPrice(normTicker);
         return new PricePoint(realData.price, 'USD', new Date().toISOString());
       }
     } catch (error) {
@@ -34,6 +35,15 @@ class YahooStockProvider extends StockProvider {
       // No mock fallback: signal upstream unavailable
       throw new Error('quote_unavailable');
     }
+  }
+
+  _normalizeTicker(ticker) {
+    // Trim, uppercase, collapse spaces, convert dot to dash for Yahoo symbols
+    return String(ticker)
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '')
+      .replace(/\./g, '-');
   }
 
   async _fetchJapaneseStockPrice(ticker) {
@@ -90,52 +100,89 @@ class YahooStockProvider extends StockProvider {
 
   async _fetchUSStockPrice(ticker) {
     const https = require('https');
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
-    
-    return new Promise((resolve, reject) => {
-      const request = https.get(url, {
+
+    // Prefer v7 quote endpoint for accuracy and richer fields
+    const quoteUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(ticker)}`;
+
+    const requestJson = (url) => new Promise((resolve, reject) => {
+      const req = https.get(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-      }, (response) => {
-        let data = '';
-        
-        response.on('data', (chunk) => {
-          data += chunk;
-        });
-        
-        response.on('end', () => {
+      }, (res) => {
+        let body = '';
+        res.on('data', (c) => body += c);
+        res.on('end', () => {
           try {
-            const jsonData = JSON.parse(data);
-            const result = jsonData.chart?.result?.[0];
-            
-            if (!result) {
-              throw new Error('No data found');
-            }
-            
-            const meta = result.meta;
-            const currentPrice = meta.regularMarketPrice || meta.previousClose;
-            
-            if (!currentPrice) {
-              throw new Error('Price data not available');
-            }
-            
-            resolve({ price: Math.round(currentPrice * 100) / 100, currency: 'USD' });
-          } catch (parseError) {
-            reject(new Error(`Failed to parse Yahoo Finance data: ${parseError.message}`));
+            resolve(JSON.parse(body));
+          } catch (e) {
+            reject(new Error(`parse_error: ${e.message}`));
           }
         });
       });
-      
-      request.on('error', (error) => {
-        reject(new Error(`HTTP request failed: ${error.message}`));
-      });
-      
-      request.setTimeout(10000, () => {
-        request.destroy();
-        reject(new Error('Request timeout'));
-      });
+      req.on('error', (err) => reject(new Error(`http_error: ${err.message}`)));
+      req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
     });
+
+    // Helper to pick the most reliable price field
+    function pickPrice(q) {
+      const fields = [
+        'regularMarketPrice',
+        'postMarketPrice',
+        'preMarketPrice',
+        'bid',
+        'ask',
+        'previousClose'
+      ];
+      for (const f of fields) {
+        const v = Number(q?.[f]);
+        if (Number.isFinite(v) && v > 0) return v;
+      }
+      return null;
+    }
+
+    try {
+      const js = await requestJson(quoteUrl);
+      const q = js?.quoteResponse?.result?.[0];
+      if (!q) throw new Error('no_quote');
+      const px = pickPrice(q);
+      if (!px) throw new Error('no_price_field');
+      // Ensure USD for US listings; Yahoo sometimes omits or sets correctly
+      const currency = (q.currency || 'USD').toUpperCase();
+      if (currency !== 'USD') {
+        // Very rare for US listings; treat as USD to avoid mis-scaling
+        // Upstream conversion, if any, should be handled separately in FX layer
+      }
+      return { price: Math.round(px * 100) / 100, currency: 'USD' };
+    } catch (e1) {
+      // Fallback to chart endpoint
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+      return new Promise((resolve, reject) => {
+        const request = https.get(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        }, (response) => {
+          let data = '';
+          response.on('data', (chunk) => { data += chunk; });
+          response.on('end', () => {
+            try {
+              const jsonData = JSON.parse(data);
+              const result = jsonData.chart?.result?.[0];
+              if (!result) throw new Error('No data found');
+              const meta = result.meta || {};
+              const currentPrice = meta.regularMarketPrice || meta.previousClose;
+              if (!currentPrice) throw new Error('Price data not available');
+              resolve({ price: Math.round(currentPrice * 100) / 100, currency: 'USD' });
+            } catch (parseError) {
+              reject(new Error(`Failed to parse Yahoo Finance data: ${parseError.message}`));
+            }
+          });
+        });
+        request.on('error', (error) => { reject(new Error(`HTTP request failed: ${error.message}`)); });
+        request.setTimeout(10000, () => { request.destroy(); reject(new Error('Request timeout')); });
+      });
+    }
   }
 
   _getMockStockData(ticker, exchange) {

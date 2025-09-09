@@ -124,12 +124,12 @@ function calculateCurrentValue(asset) {
   // For demo purposes, we'll use simple multipliers to simulate market changes
   // In production, you would fetch real market data from APIs
   const marketMultipliers = {
-    'us_stock': 1.15,      // +15% (typical US stock growth)
-    'jp_stock': 1.08,      // +8% (typical JP stock growth)
-    'precious_metal': 1.12, // +12% (precious metals appreciation)
-    'real_estate': 1.05,   // +5% (real estate appreciation)
-    'watch': 1.20,         // +20% (luxury watches appreciation)
-    'collection': 1.10,    // +10% (collectibles appreciation)
+    'us_stock': 1.0,
+    'jp_stock': 1.0,
+    'precious_metal': 1.0,
+    'real_estate': 1.0,
+    'watch': 1.0,
+    'collection': 1.0,
     'cash': 1.0            // Cash remains same value
   };
   
@@ -1684,28 +1684,35 @@ app.get('/api/assets', async (req, res) => {
             }
           });
         } else {
-          // Add current market value to asset
-          asset.current_value_jpy = calculateCurrentValue(asset);
-          asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
-          asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
-          
-          enhancedRows.push(asset);
-          completed++;
-          if (completed === rows.length) {
-            if (req.query.page) {
-              res.json({
-                assets: enhancedRows,
-                pagination: {
-                  page: pageNum,
-                  limit: limitNum,
-                  total: total,
-                  totalPages: totalPages
-                }
-              });
+          // Other classes (watch, real_estate, collection, etc.)
+          // Prefer latest manual/market valuation if exists; fallback to neutral calc
+          db.get('SELECT value_jpy FROM valuations WHERE asset_id = ? ORDER BY as_of DESC, id DESC LIMIT 1', [asset.id], (err, valuation) => {
+            if (!err && valuation && Number(valuation.value_jpy)) {
+              asset.current_value_jpy = Number(valuation.value_jpy);
             } else {
-              res.json(enhancedRows);
+              asset.current_value_jpy = calculateCurrentValue(asset);
             }
-          }
+            asset.gain_loss_jpy = asset.current_value_jpy - asset.book_value_jpy;
+            asset.gain_loss_percentage = ((asset.current_value_jpy - asset.book_value_jpy) / asset.book_value_jpy * 100).toFixed(2);
+
+            enhancedRows.push(asset);
+            completed++;
+            if (completed === rows.length) {
+              if (req.query.page) {
+                res.json({
+                  assets: enhancedRows,
+                  pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: total,
+                    totalPages: totalPages
+                  }
+                });
+              } else {
+                res.json(enhancedRows);
+              }
+            }
+          });
         }
       });
     });
@@ -3003,6 +3010,75 @@ app.post('/api/valuations/:assetId/refresh', async (req, res) => {
   } catch (error) {
     console.error('Valuation refresh error:', error);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/valuations/manual - Manually set valuation for an asset (admin only)
+app.post('/api/valuations/manual', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { asset_id, value_jpy, unit_price_jpy, as_of } = req.body || {};
+    const assetId = Number(asset_id);
+    const value = Number(value_jpy);
+    const unit = unit_price_jpy != null ? Number(unit_price_jpy) : null;
+    if (!Number.isFinite(assetId) || assetId <= 0) return res.status(400).json({ error: 'invalid_asset_id' });
+    if (!Number.isFinite(value) || value < 0) return res.status(400).json({ error: 'invalid_value' });
+
+    // ensure asset exists
+    db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, asset) => {
+      if (err) return res.status(500).json({ error: 'db_error' });
+      if (!asset) return res.status(404).json({ error: 'asset_not_found' });
+
+      const asOf = as_of ? new Date(as_of) : new Date();
+      const iso = isNaN(asOf.getTime()) ? new Date().toISOString() : asOf.toISOString();
+      const fxContext = JSON.stringify({ source: 'manual', editor: getUserId(req) });
+      db.run(
+        'INSERT INTO valuations (asset_id, as_of, value_jpy, unit_price_jpy, fx_context) VALUES (?, ?, ?, ?, ?)',
+        [assetId, iso, Math.round(value), unit != null && Number.isFinite(unit) ? unit : null, fxContext],
+        function (err2) {
+          if (err2) return res.status(500).json({ error: 'db_error' });
+          logAudit('valuations', this.lastID, 'MANUAL_SET', null, { asset_id: assetId, as_of: iso, value_jpy: Math.round(value), unit_price_jpy: unit }, getUserId(req));
+          return res.json({ id: this.lastID, asset_id: assetId, as_of: iso, value_jpy: Math.round(value), unit_price_jpy: unit, fx_context: { source: 'manual' } });
+        }
+      );
+    });
+  } catch (e) {
+    console.error('Manual valuation error:', e);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// DELETE /api/valuations/manual/latest/:assetId - Disable latest manual valuation (revert to book-based)
+app.delete('/api/valuations/manual/latest/:assetId', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const assetId = Number(req.params.assetId);
+    if (!Number.isFinite(assetId) || assetId <= 0) return res.status(400).json({ error: 'invalid_asset_id' });
+    // ensure asset exists
+    db.get('SELECT * FROM assets WHERE id = ?', [assetId], (err, asset) => {
+      if (err) return res.status(500).json({ error: 'db_error' });
+      if (!asset) return res.status(404).json({ error: 'asset_not_found' });
+
+      db.get(
+        `SELECT id, asset_id, as_of, value_jpy, unit_price_jpy, fx_context 
+           FROM valuations 
+          WHERE asset_id = ? 
+            AND (fx_context LIKE '%"source":"manual"%' OR fx_context LIKE '%manual%')
+          ORDER BY as_of DESC, id DESC 
+          LIMIT 1`,
+        [assetId],
+        (err2, row) => {
+          if (err2) return res.status(500).json({ error: 'db_error' });
+          if (!row) return res.status(404).json({ error: 'manual_valuation_not_found' });
+          db.run('DELETE FROM valuations WHERE id = ?', [row.id], function (err3) {
+            if (err3) return res.status(500).json({ error: 'db_error' });
+            logAudit('valuations', row.id, 'MANUAL_DISABLE', row, null, getUserId(req));
+            return res.json({ success: true, deleted_id: row.id });
+          });
+        }
+      );
+    });
+  } catch (e) {
+    console.error('Manual valuation disable error:', e);
+    res.status(500).json({ error: 'internal_error' });
   }
 });
 
